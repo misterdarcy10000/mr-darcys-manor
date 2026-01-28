@@ -269,8 +269,8 @@ DIV_LOOKBACK_DEFAULT = 90
 DIV_DAYS_SINCE_DEFAULT = 25
 DIV_RSI_DIFF_DEFAULT = 2.0
 VOL_SMA_PERIOD = 30 
-DIV_STRICT_DEFAULT = "No"
-DIV_SOURCE_DEFAULT = "Close"
+DIV_STRICT_DEFAULT = "Yes"
+DIV_SOURCE_DEFAULT = "High/Low"
 DIV_STRICT_OPTS = ["Yes", "No"]
 DIV_SOURCE_OPTS = ["High/Low", "Close"]
 DIV_CSV_PERIODS_DAYS = [5, 21, 63, 126, 252]
@@ -1586,24 +1586,48 @@ def calculate_ema_distance_data(ticker, years_back):
         st.error(f"Error fetching data: {e}")
         return None
 
-def run_ema_backtest(signal_series, price_data, low_data, lookforward=EMA_DIST_BACKTEST_DAYS, drawdown_thresh=EMA_DIST_BACKTEST_DD):
+def run_ema_backtest(signal_series, entry_data, compare_data, lookforward=EMA_DIST_BACKTEST_DAYS, target_pct=EMA_DIST_BACKTEST_DD):
+    """
+    Bi-directional backtest.
+    If target_pct < 0: Checks if LOWS go below entry * (1+target_pct) [Bearish/Reversion Down]
+    If target_pct > 0: Checks if HIGHS go above entry * (1+target_pct) [Bullish/Reversion Up]
+    """
     idxs = signal_series[signal_series].index
     if len(idxs) == 0: return 0, 0, 0
-    hits = 0; days_to_dd = []
-    closes = price_data.values; lows = low_data.values; is_signal = signal_series.values
-    n = len(closes)
+    hits = 0; days_to_target = []
+    
+    entries = entry_data.values
+    comp_vals = compare_data.values
+    is_signal = signal_series.values
+    n = len(entries)
+    
+    # Determine direction based on target sign
+    is_bearish_target = (target_pct < 0)
+    
     for i in range(n):
         if not is_signal[i]: continue
         if i + lookforward >= n: continue 
-        entry_price = closes[i]
-        future_window = lows[i+1 : i+1+lookforward]
-        min_future = np.min(future_window)
-        dd = (min_future - entry_price) / entry_price
-        if dd <= drawdown_thresh:
-            hits += 1
-            target_price = entry_price * (1 + drawdown_thresh)
-            hit_indices = np.where(future_window <= target_price)[0]
-            if len(hit_indices) > 0: days_to_dd.append(hit_indices[0] + 1)
+        
+        entry_price = entries[i]
+        future_window = comp_vals[i+1 : i+1+lookforward]
+        
+        if is_bearish_target:
+            # Look for price DROP (use Lows)
+            min_future = np.min(future_window)
+            if min_future <= entry_price * (1 + target_pct):
+                hits += 1
+                # Find first day it hit
+                hit_indices = np.where(future_window <= entry_price * (1 + target_pct))[0]
+                if len(hit_indices) > 0: days_to_target.append(hit_indices[0] + 1)
+        else:
+            # Look for price POP (use Highs)
+            max_future = np.max(future_window)
+            if max_future >= entry_price * (1 + target_pct):
+                hits += 1
+                # Find first day it hit
+                hit_indices = np.where(future_window >= entry_price * (1 + target_pct))[0]
+                if len(hit_indices) > 0: days_to_target.append(hit_indices[0] + 1)
+                
     hit_rate = (hits / len(idxs)) * 100 if len(idxs) > 0 else 0
-    median_days = np.median(days_to_dd) if days_to_dd else 0
+    median_days = np.median(days_to_target) if days_to_target else 0
     return len(idxs), hit_rate, median_days
