@@ -1005,13 +1005,16 @@ def run_seasonality_app(df_global):
 
 def run_ema_distance_app(df_global):
     st.title("📏 EMA Distance Analysis")
-    col_in1, col_in2, _ = st.columns([1, 1, 2])
+    col_in1, col_in2, col_in3 = st.columns([1, 1, 1])
     with col_in1:
         # UPDATED: Use Constant
         ticker = st.text_input("Ticker", value=ud.EMA_DIST_DEFAULT_TICKER).upper().strip()
     with col_in2:
         # UPDATED: Use Constant
         years_back = st.number_input("Years to Analyze", min_value=1, max_value=20, value=ud.EMA_DIST_DEFAULT_YEARS, step=1)
+    with col_in3:
+        direction = st.selectbox("Analysis Direction", ["Above (Overbought)", "Below (Oversold)"], index=0)
+        is_below = "Below" in direction
     
     if not ticker:
         st.warning("Please enter a ticker.")
@@ -1023,6 +1026,7 @@ def run_ema_distance_app(df_global):
 
     close_col = 'CLOSE' if 'CLOSE' in df_clean.columns else 'Close'
     low_col = 'LOW' if 'LOW' in df_clean.columns else 'Low'
+    high_col = 'HIGH' if 'HIGH' in df_clean.columns else 'High'
     date_col = next((c for c in df_clean.columns if 'DATE' in c), "DATE")
     
     current_price = df_clean[close_col].iloc[-1]
@@ -1031,51 +1035,99 @@ def run_ema_distance_app(df_global):
 
     st.subheader(f"{ticker} vs Moving Avgs & Percentiles")
     with st.expander("ℹ️ Table User Guide"):
-        st.markdown(f"""**1. Key Metrics Tracked.**\nThe app calculates the percentage distance (the "Gap") between the current price and five different moving averages:\n* 8-day and 21-day EMA: Short-term momentum and "swing" levels.\n* 50-day, 100-day, and 200-day SMA: Medium to long-term trend baselines.\n\n**2. The "Rubber Band" Logic (Percentiles).**\nRather than just showing the current gap, the app looks at {years_back} years of history for that specific ticker to see how rare the current gap is. It calculates:\n* **p50 (Median):** The typical distance from the average.\n* **p70/p80 (Uptrend):** These levels generally occur in strong uptrends.\n* **p90/p95 (Extremes):** The levels reached only 10% or 5% of the time historically.\n\n**3. Visual Highlighting System.**\nThe table uses a traffic-light system to categorize the current price action:\n* 🟢 **Buy Zone (Green):** Triggered if the Gap is ≤ p50 (Median) AND price is > 8-EMA. Suggests a "pullback to the mean" in an uptrend.\n* 🟡 **Warning Zone (Yellow):** Triggered if the gap is between p50 and p90. Price is extending but not yet extreme.\n* 🔴 **Sell/Trim Zone (Red):** Triggered if the gap is $\ge$ p90. Price is statistically over-extended.""")
+        st.markdown(f"""**1. Key Metrics Tracked.**\nThe app calculates the percentage distance (the "Gap") between the current price and five different moving averages.\n\n**2. The "Rubber Band" Logic (Percentiles).**\nRather than just showing the current gap, the app looks at {years_back} years of history for that specific ticker to see how rare the current gap is.\n\n**3. Visual Highlighting System.**\nThe table uses a traffic-light system to categorize the current price action:\n* 🟢 **Reversion Zone (Green):** Gap is near the historical median. Suggests a safe entry or mean reversion.\n* 🔴 **Extreme Zone (Red):** Gap is historically extended (Top 10% or Bottom 10%). Price is statistically over-extended.""")
 
     stats_data = []
     thresholds = {} 
     metrics = [("Close vs 8-EMA", df_clean['EMA_8'], df_clean['Dist_8']), ("Close vs 21-EMA", df_clean['EMA_21'], df_clean['Dist_21']), ("Close vs 50-SMA", df_clean['SMA_50'], df_clean['Dist_50']), ("Close vs 100-SMA", df_clean['SMA_100'], df_clean['Dist_100']), ("Close vs 200-SMA", df_clean['SMA_200'], df_clean['Dist_200'])]
+    
+    # Dynamic Percentiles based on direction
+    pct_labels = ['p50 (Med)', 'p30', 'p20', 'p10 (Ext)', 'p05'] if is_below else ['p50 (Med)', 'p70', 'p80', 'p90 (Ext)', 'p95']
+    pct_values = [50, 30, 20, 10, 5] if is_below else [50, 70, 80, 90, 95]
+
     for label, ma_series, dist_series in metrics:
-        p_vals = np.percentile(dist_series, [50, 70, 80, 90, 95])
-        thresholds[dist_series.name] = { 'p80': p_vals[2], 'p90': p_vals[3] }
-        stats_data.append({"Metric": label, "Price": current_price, "MA Level": ma_series.iloc[-1], "Gap": dist_series.iloc[-1], "Avg": dist_series.mean(), "p50": p_vals[0], "p70": p_vals[1], "p80": p_vals[2], "p90": p_vals[3], "p95": p_vals[4]})
+        p_vals = np.percentile(dist_series, pct_values)
+        # Store thresholds for signals later
+        thresholds[dist_series.name] = { 'ext': p_vals[3], 'mean': p_vals[0] } 
+        
+        row = {"Metric": label, "Price": current_price, "MA Level": ma_series.iloc[-1], "Gap": dist_series.iloc[-1], "Avg": dist_series.mean()}
+        for i, pl in enumerate(pct_labels):
+            row[pl] = p_vals[i]
+        stats_data.append(row)
 
     df_stats = pd.DataFrame(stats_data)
+    
     def color_combined(row):
         styles = [''] * len(row)
-        gap, p50, p90 = row['Gap'], row['p50'], row['p90']
+        gap = row['Gap']
+        
+        # Extract dynamic thresholds from row using column names
+        # Note: We rely on the order or explicit naming. 
+        # For simplicity, we grab the extreme and median values directly
+        p_mean = row[pct_labels[0]]
+        p_ext = row[pct_labels[3]]
+        
         idx_gap = df_stats.columns.get_loc("Gap")
-        if gap >= p90: styles[idx_gap] = 'background-color: #fce8e6; color: #c5221f; font-weight: bold;'
-        elif gap <= p50 and (current_price > current_ema8): styles[idx_gap] = 'background-color: #e6f4ea; color: #1e7e34; font-weight: bold;'
-        elif gap > p50 and gap < p90: styles[idx_gap] = 'background-color: #fff8e1; color: #d68f00;'
+        
+        if is_below:
+            # Below Logic: Gaps are negative.
+            # Extreme (Red) = Gap <= p10 (e.g. -20% <= -15%)
+            # Safe (Green) = Gap >= p50 (e.g. -2% >= -5%)
+            if gap <= p_ext: styles[idx_gap] = 'background-color: #fce8e6; color: #c5221f; font-weight: bold;'
+            elif gap >= p_mean: styles[idx_gap] = 'background-color: #e6f4ea; color: #1e7e34; font-weight: bold;'
+        else:
+            # Above Logic: Gaps are positive.
+            # Extreme (Red) = Gap >= p90
+            # Safe (Green) = Gap <= p50
+            if gap >= p_ext: styles[idx_gap] = 'background-color: #fce8e6; color: #c5221f; font-weight: bold;'
+            elif gap <= p_mean and (current_price > current_ema8): styles[idx_gap] = 'background-color: #e6f4ea; color: #1e7e34; font-weight: bold;'
+            
         return styles
 
-    st.dataframe(df_stats.style.apply(color_combined, axis=1).format(ud.fmt_pct_display, subset=["Gap", "Avg", "p50", "p70", "p80", "p90", "p95"]), use_container_width=True, hide_index=True, column_config={"Price": st.column_config.NumberColumn("Price", format="$%.2f"), "MA Level": st.column_config.NumberColumn("MA Level", format="$%.2f")})
+    st.dataframe(df_stats.style.apply(color_combined, axis=1).format(ud.fmt_pct_display, subset=["Gap", "Avg"] + pct_labels), use_container_width=True, hide_index=True, column_config={"Price": st.column_config.NumberColumn("Price", format="$%.2f"), "MA Level": st.column_config.NumberColumn("MA Level", format="$%.2f")})
     
     st.subheader("Combo Over-Extension Signals")
-    t8_90 = thresholds['Dist_8']['p90']; t21_80 = thresholds['Dist_21']['p80']; t50_80 = thresholds['Dist_50']['p80']
-    m_d = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_21'] >= t21_80)
-    m_fs = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_50'] >= t50_80)
-    m_t = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_21'] >= t21_80) & (df_clean['Dist_50'] >= t50_80)
     
-    res_d = ud.run_ema_backtest(m_d, df_clean[close_col], df_clean[low_col])
-    res_fs = ud.run_ema_backtest(m_fs, df_clean[close_col], df_clean[low_col])
-    res_t = ud.run_ema_backtest(m_t, df_clean[close_col], df_clean[low_col])
+    # Logic Switching for Signals
+    t8_ext = thresholds['Dist_8']['ext']; t21_ext = thresholds['Dist_21']['ext']; t50_ext = thresholds['Dist_50']['ext']
+    
+    if is_below:
+        # Check if gaps are LOWER than the extreme threshold (more negative)
+        m_d = (df_clean['Dist_8'] <= t8_ext) & (df_clean['Dist_21'] <= t21_ext)
+        m_fs = (df_clean['Dist_8'] <= t8_ext) & (df_clean['Dist_50'] <= t50_ext)
+        m_t = (df_clean['Dist_8'] <= t8_ext) & (df_clean['Dist_21'] <= t21_ext) & (df_clean['Dist_50'] <= t50_ext)
+        # Target: Price BOUNCE (positive return)
+        backtest_target = abs(ud.EMA_DIST_BACKTEST_DD) # +0.08
+        compare_col = df_clean[high_col] # Check Highs for bounce
+        trig_desc = "Gap ≤ p10"
+        
+    else:
+        # Check if gaps are HIGHER than extreme threshold
+        m_d = (df_clean['Dist_8'] >= t8_ext) & (df_clean['Dist_21'] >= t21_ext)
+        m_fs = (df_clean['Dist_8'] >= t8_ext) & (df_clean['Dist_50'] >= t50_ext)
+        m_t = (df_clean['Dist_8'] >= t8_ext) & (df_clean['Dist_21'] >= t21_ext) & (df_clean['Dist_50'] >= t50_ext)
+        # Target: Price DROP (negative return)
+        backtest_target = -abs(ud.EMA_DIST_BACKTEST_DD) # -0.08
+        compare_col = df_clean[low_col] # Check Lows for drop
+        trig_desc = "Gap ≥ p90"
+    
+    res_d = ud.run_ema_backtest(m_d, df_clean[close_col], compare_col, target_pct=backtest_target)
+    res_fs = ud.run_ema_backtest(m_fs, df_clean[close_col], compare_col, target_pct=backtest_target)
+    res_t = ud.run_ema_backtest(m_t, df_clean[close_col], compare_col, target_pct=backtest_target)
 
     d_active = "✅" if bool(m_d.iloc[-1]) else "❌"
     fs_active = "✅" if bool(m_fs.iloc[-1]) else "❌"
     t_active = "✅" if bool(m_t.iloc[-1]) else "❌"
 
     combo_rows = [
-        {"Combo Rule": "Double EMA", "Triggers": "(8-EMA Gap ≥ p90), (21-EMA Gap ≥ p80)", "Occurrences": res_d[0], "Hit Rate (>=8% Draw Down)": res_d[1], "Median Days to Draw Down": f"{int(res_d[2])} days", "Active Today?": d_active, "raw_status": bool(m_d.iloc[-1])},
-        {"Combo Rule": "Fast vs Swing", "Triggers": "(8-EMA gap ≥ p90), (50-SMA gap ≥ p80)", "Occurrences": res_fs[0], "Hit Rate (>=8% Draw Down)": res_fs[1], "Median Days to Draw Down": f"{int(res_fs[2])} days", "Active Today?": fs_active, "raw_status": bool(m_fs.iloc[-1])},
-        {"Combo Rule": "Triple Stack", "Triggers": "(8-EMA gap ≥ p90), (50-SMA gap ≥ p80), (21-EMA gap ≥ p80)", "Occurrences": res_t[0], "Hit Rate (>=8% Draw Down)": res_t[1], "Median Days to Draw Down": f"{int(res_t[2])} days", "Active Today?": t_active, "raw_status": bool(m_t.iloc[-1])}
+        {"Combo Rule": "Double EMA", "Triggers": f"(8-EMA {trig_desc}), (21-EMA {trig_desc})", "Occurrences": res_d[0], f"Hit Rate (>={abs(backtest_target)*100:.0f}% Move)": res_d[1], "Median Days": f"{int(res_d[2])} days", "Active Today?": d_active, "raw_status": bool(m_d.iloc[-1])},
+        {"Combo Rule": "Fast vs Swing", "Triggers": f"(8-EMA {trig_desc}), (50-SMA {trig_desc})", "Occurrences": res_fs[0], f"Hit Rate (>={abs(backtest_target)*100:.0f}% Move)": res_fs[1], "Median Days": f"{int(res_fs[2])} days", "Active Today?": fs_active, "raw_status": bool(m_fs.iloc[-1])},
+        {"Combo Rule": "Triple Stack", "Triggers": f"(8-EMA {trig_desc}), (50-SMA {trig_desc}), (21-EMA {trig_desc})", "Occurrences": res_t[0], f"Hit Rate (>={abs(backtest_target)*100:.0f}% Move)": res_t[1], "Median Days": f"{int(res_t[2])} days", "Active Today?": t_active, "raw_status": bool(m_t.iloc[-1])}
     ]
     
     df_combo = pd.DataFrame(combo_rows)
     def style_combo(row): return ['font-weight: bold; color: #c5221f;' if row['raw_status'] else ''] * len(row)
-    st.dataframe(df_combo.style.apply(style_combo, axis=1).format({"Hit Rate (>=8% Draw Down)": "{:.1f}%"}), use_container_width=True, hide_index=True, column_config={"Triggers": st.column_config.TextColumn("Trigger Conditions", width="large"), "Active Today?": st.column_config.TextColumn("Active Today?", width="small")}, column_order=["Combo Rule", "Triggers", "Occurrences", "Hit Rate (>=8% Draw Down)", "Median Days to Draw Down", "Active Today?"])
+    st.dataframe(df_combo.style.apply(style_combo, axis=1).format({f"Hit Rate (>={abs(backtest_target)*100:.0f}% Move)": "{:.1f}%"}), use_container_width=True, hide_index=True, column_config={"Triggers": st.column_config.TextColumn("Trigger Conditions", width="large"), "Active Today?": st.column_config.TextColumn("Active Today?", width="small")})
 
     st.subheader("Visualizing the % Distance from 50 SMA")
     chart_data = pd.DataFrame({'Date': pd.to_datetime(df_clean[date_col]), 'Distance (%)': df_clean['Dist_50']})
@@ -1085,4 +1137,3 @@ def run_ema_distance_app(df_global):
     bars = alt.Chart(chart_data).mark_bar().encode(x=alt.X('Date:T', title=None), y=alt.Y('Distance (%)', title='% Dist from 50 SMA'), color=alt.condition(alt.datum['Distance (%)'] > 0, alt.value("#71d28a"), alt.value("#f29ca0")), tooltip=['Date', 'Distance (%)'])
     rule = alt.Chart(pd.DataFrame({'y': [current_dist_50]})).mark_rule(color='#333', strokeDash=[5, 5], strokeWidth=2).encode(y='y:Q')
     st.altair_chart((bars + rule).properties(height=300).interactive(), use_container_width=True)
-
