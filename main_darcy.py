@@ -855,7 +855,11 @@ def run_seasonality_app(df_global):
                 
                 current_month = date.today().month
                 current_year = date.today().year
+                
+                # --- FIX 1: Geometric Compounding for Text Display ---
+                # Was: .sum()
                 cur_val = curr_df.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1).reindex(range(1, 13)).get(current_month, 0.0)
+                
                 if pd.isna(cur_val): cur_val = 0.0
                 hist_avg = avg_stats.get(current_month, 0.0)
                 diff = cur_val - hist_avg
@@ -882,7 +886,11 @@ def run_seasonality_app(df_global):
                     st.subheader(f"📈 Performance Tracking")
                     hist_cumsum = avg_stats.cumsum()
                     line_data_hist = pd.DataFrame({'Month': range(1, 13), 'MonthName': ud.SEAS_MONTH_NAMES, 'Value': hist_cumsum.values, 'Type': f'Avg ({start_year}-{end_year})'})
+                    
+                    # --- FIX 2: Geometric Compounding for Chart Lines ---
+                    # Was: .sum()
                     curr_monthly_stats = curr_df.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1).reindex(range(1, 13)) 
+                    
                     curr_cumsum = curr_monthly_stats.cumsum()
                     valid_curr_indices = curr_monthly_stats.dropna().index
                     line_data_curr = pd.DataFrame({'Month': valid_curr_indices, 'MonthName': [ud.SEAS_MONTH_NAMES[i-1] for i in valid_curr_indices], 'Value': curr_cumsum.loc[valid_curr_indices].values, 'Type': f'Current Year ({current_year})'})
@@ -897,7 +905,9 @@ def run_seasonality_app(df_global):
                     completed_curr_df = curr_df[curr_df['Month'] < current_month].copy()
                     curr_bar_data = pd.DataFrame()
                     if not completed_curr_df.empty:
-                        curr_vals = completed_curr_df.groupby('Month')['Pct'].mean()
+                        # For completed past months, .mean() is usually fine for "average daily return", 
+                        # but for the bar chart we want "Total Month Return", so we should use the same logic here too:
+                        curr_vals = completed_curr_df.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1)
                         curr_bar_data = pd.DataFrame({'Month': curr_vals.index, 'MonthName': [ud.SEAS_MONTH_NAMES[i-1] for i in curr_vals.index], 'Value': curr_vals.values, 'Type': f'{current_year} Actual'})
                     combined_bar_data = pd.concat([hist_bar_data, curr_bar_data])
                     combined_bar_data['Label'] = combined_bar_data['Value'].apply(ud.fmt_finance_str)
@@ -1137,4 +1147,5 @@ def run_ema_distance_app(df_global):
     bars = alt.Chart(chart_data).mark_bar().encode(x=alt.X('Date:T', title=None), y=alt.Y('Distance (%)', title='% Dist from 50 SMA'), color=alt.condition(alt.datum['Distance (%)'] > 0, alt.value("#71d28a"), alt.value("#f29ca0")), tooltip=['Date', 'Distance (%)'])
     rule = alt.Chart(pd.DataFrame({'y': [current_dist_50]})).mark_rule(color='#333', strokeDash=[5, 5], strokeWidth=2).encode(y='y:Q')
     st.altair_chart((bars + rule).properties(height=300).interactive(), use_container_width=True)
+
 
