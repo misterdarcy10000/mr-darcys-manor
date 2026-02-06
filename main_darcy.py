@@ -838,41 +838,42 @@ def run_seasonality_app(df_global):
         if df_raw is None or df_raw.empty: 
             st.error(f"Could not load data for {ticker_input}.")
         else:
-            # --- 3. FIX: CLEAN AND PREPARE DATA ---
-            # We work on a copy to avoid mutating the original repeatedly
+            # --- 3. FIX: CLEANING & STANDARDIZATION ---
+            # Create a copy to manipulate safely
             df = df_raw.copy()
-            df.columns = [c.strip() for c in df.columns]
+            
+            # A. Force all columns to UPPERCASE to prevent "Duplicate Keys" crash
+            # e.g. 'Date' and 'DATE' will merge or be identified clearly
+            df.columns = [c.strip().upper() for c in df.columns]
 
-            # A. HANDLE DATES (Rename to 'ChartDate' to avoid duplicates)
-            # Find the date column (could be DATE, CHARTDATE, Date, etc.)
-            d_col = next((c for c in df.columns if 'DATE' in c.upper() or 'Date' in c), None)
+            # B. Identify and Rename Date Column to 'ChartDate'
+            # We look for specific keys to avoid matching 'UPDATE_DATE' etc.
+            date_candidates = ['CHARTDATE', 'DATE', 'TRADE DATE', 'DT']
+            d_col = next((c for c in df.columns if c in date_candidates), None)
             
             if d_col:
-                # Rename it to the standard 'ChartDate' required by Utils
-                # This prevents having both 'CHARTDATE' and 'ChartDate' which causes the crash
+                # Rename the found uppercase column to 'ChartDate' (Mixed Case) required by Utils
                 df = df.rename(columns={d_col: 'ChartDate'})
-                
-                # Ensure it's datetime and sorted
                 df['ChartDate'] = pd.to_datetime(df['ChartDate'])
                 df = df.sort_values(by='ChartDate')
             else:
-                st.error("Critical Error: No 'DATE' column found in data.")
+                st.error(f"Critical Error: Could not find Date column. Available: {list(df.columns)}")
                 return
 
-            # B. HANDLE PRICE & PCT (Drop old PCT, create new Pct)
-            potential_cols = ['CLOSE', 'Close', 'Adj Close', 'ADJ CLOSE', 'Price', 'PRICE', 'Last', 'LAST']
-            close_col = next((c for c in df.columns if c in potential_cols or c.upper() in potential_cols), None)
+            # C. Identify Price and Handle Pct
+            price_candidates = ['CLOSE', 'ADJ CLOSE', 'PRICE', 'LAST']
+            close_col = next((c for c in df.columns if c in price_candidates), None)
             
             if close_col:
-                # If there is an existing 'PCT' or 'pct' column, drop it to avoid collision
-                cols_to_drop = [c for c in df.columns if c.upper() == 'PCT']
-                if cols_to_drop:
-                    df = df.drop(columns=cols_to_drop)
-
-                # Calculate fresh Pct on full history (Fixes the 2026/Jan 2nd math issue)
+                # Drop any existing 'PCT' column to ensure we use our fresh calculation
+                if 'PCT' in df.columns:
+                    df = df.drop(columns=['PCT'])
+                
+                # Calculate GLOBAL PCT (Fixes the Jan 2026 / 3.5% vs -1.47% issue)
+                # Calculating on full history ensures Jan 2nd sees Dec 31st price
                 df['Pct'] = df[close_col].pct_change().fillna(0)
                 
-                # Update Session State with this CLEAN dataframe
+                # Update Session State with this clean, corrected DataFrame
                 st.session_state.seas_single_df = df
             else:
                 st.error("Critical Error: Could not find Price column.")
@@ -890,7 +891,7 @@ def run_seasonality_app(df_global):
             with c3: end_year = st.number_input("End Year", min_value=start_year, max_value=max_y, value=max_y, key="seas_end")
 
             # --- 5. CALCULATE STATS ---
-            # Now passing a clean dataframe with unique column names
+            # Now passing 'df' which definitely has 'ChartDate', 'Pct', and NO duplicates
             stats = ud.calculate_seasonality_stats(df, start_year, end_year)
             
             if not stats: st.warning("Insufficient data.")
@@ -902,11 +903,12 @@ def run_seasonality_app(df_global):
                 current_month = date.today().month
                 current_year = date.today().year
                 
-                # Use 'ChartDate' which we know exists now
+                # --- 6. CURRENT YEAR DISPLAY ---
+                # Filter safely using 'ChartDate'
                 df_curr_year_safe = df[df['ChartDate'].dt.year == current_year].copy()
                 df_curr_year_safe['Month'] = df_curr_year_safe['ChartDate'].dt.month
                 
-                # Calculate Compounded Return for current month
+                # Calculate Compounded Return: (1+r)*(1+r)... - 1
                 cur_val = df_curr_year_safe.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1).reindex(range(1, 13)).get(current_month, 0.0)
                 
                 if pd.isna(cur_val): cur_val = 0.0
