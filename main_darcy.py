@@ -821,29 +821,37 @@ def run_seasonality_app(df_global):
 
         ticker_map = ud.load_ticker_map()
         
-        # Check if we need to fetch new data
+        # 1. Check if we need to fetch NEW data (Ticker changed or Data is missing)
         if (ticker_input != st.session_state.seas_single_last_ticker) or (st.session_state.seas_single_df is None):
             with st.spinner(f"Fetching history for {ticker_input}..."):
                 fetched_df = ud.fetch_history_optimized(ticker_input, ticker_map)
+                
+                # IMMEDIATE FIX: Calculate 'Pct' right after fetching
+                if fetched_df is not None and not fetched_df.empty:
+                    close_col = next((c for c in fetched_df.columns if c.upper() == 'CLOSE'), None)
+                    if close_col:
+                        fetched_df['Pct'] = fetched_df[close_col].pct_change().fillna(0)
+                
                 st.session_state.seas_single_df = fetched_df
                 st.session_state.seas_single_last_ticker = ticker_input
         
-        # Load from Session State
+        # 2. Load the DataFrame from Session State
         df = st.session_state.seas_single_df
 
         if df is None or df.empty: 
             st.error(f"Could not load data for {ticker_input}. Check the ticker symbol.")
         else:
-            # --- CRITICAL FIX: Ensure 'Pct' exists even if cached data is stale ---
+            # 3. SELF-HEALING BLOCK: Check if 'Pct' is missing (from old cache) and fix it
             if 'Pct' not in df.columns:
                 close_col = next((c for c in df.columns if c.upper() == 'CLOSE'), None)
                 if close_col:
-                    # Calculate Pct on the full history immediately
                     df['Pct'] = df[close_col].pct_change().fillna(0)
-                    st.session_state.seas_single_df = df # Update Session State
+                    st.session_state.seas_single_df = df # Save the fix back to session state
                 else:
-                    st.error("Could not find Close column to calculate returns.")
-                    return
+                    # If we can't fix it, force a reload
+                    st.warning("Data schema mismatch. Refreshing data...")
+                    del st.session_state.seas_single_df
+                    st.rerun()
 
             try:
                 temp_df = df.copy()
@@ -871,11 +879,11 @@ def run_seasonality_app(df_global):
                 current_month = date.today().month
                 current_year = date.today().year
                 
-                # --- CALCULATION LOGIC: Use SAFE dataframe for Current Year ---
+                # --- CALCULATION: Use SAFE dataframe for Current Year (Compounded) ---
                 d_col_main = next((c for c in df.columns if 'DATE' in c.upper()), 'Date')
                 
                 # Filter main DF for current year to ensure Pct values are preserved
-                # This ensures Jan 2nd correctly sees Dec 31st as prev day
+                # This ensures Jan 2nd correctly sees Dec 31st as prev day for calc
                 df_curr_year_safe = df[pd.to_datetime(df[d_col_main]).dt.year == current_year].copy()
                 df_curr_year_safe['Month'] = pd.to_datetime(df_curr_year_safe[d_col_main]).dt.month
                 
