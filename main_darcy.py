@@ -802,7 +802,7 @@ def run_rsi_scanner_app(df_global):
 import traceback
 
 def run_seasonality_app(df_global):
-    st.title("📅 Seasonality (Debug Mode)")
+    st.title("📅 Seasonality")
     
     # --- 1. SESSION STATE SETUP ---
     if 'seas_single_df' not in st.session_state: st.session_state.seas_single_df = None
@@ -814,6 +814,9 @@ def run_seasonality_app(df_global):
     tab_single, tab_scan = st.tabs(["🔎 Single Ticker Analysis", "🚀 Opportunity Scanner"])
     
     with tab_single:
+        with st.expander("ℹ️ Page Notes: Methodology"):
+            st.markdown("""**📊 Calendar Month Performance**\n* **Year Total:** The **Compounded Return** for that year (Start Price vs End Price).\n* **Month Average:** The **AVERAGE** return for that specific month across the selected history.""")
+
         c1, c2, c3 = st.columns([1, 1, 1])
         with c1: ticker_input = st.text_input("Ticker", value="SPY", key="seas_ticker").strip().upper()
         
@@ -835,66 +838,61 @@ def run_seasonality_app(df_global):
         if df_raw is None or df_raw.empty: 
             st.error(f"Could not load data for {ticker_input}.")
         else:
-            # --- 3. DEBUG & PREPARE ---
+            # --- 3. FIX: CLEAN AND PREPARE DATA ---
+            # We work on a copy to avoid mutating the original repeatedly
             df = df_raw.copy()
             df.columns = [c.strip() for c in df.columns]
-            
-            # DEBUG PRINT 1: Raw Columns
-            st.write("--- DEBUG INFO ---")
-            st.write(f"**Raw Columns:** {list(df.columns)}")
 
-            # A. Identify Date
-            d_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
+            # A. HANDLE DATES (Rename to 'ChartDate' to avoid duplicates)
+            # Find the date column (could be DATE, CHARTDATE, Date, etc.)
+            d_col = next((c for c in df.columns if 'DATE' in c.upper() or 'Date' in c), None)
+            
             if d_col:
-                df[d_col] = pd.to_datetime(df[d_col])
-                df = df.sort_values(by=d_col)
+                # Rename it to the standard 'ChartDate' required by Utils
+                # This prevents having both 'CHARTDATE' and 'ChartDate' which causes the crash
+                df = df.rename(columns={d_col: 'ChartDate'})
                 
-                # FORCE CREATION OF ChartDate
-                df['ChartDate'] = df[d_col]
-                st.success(f"✅ Created 'ChartDate' from '{d_col}'")
+                # Ensure it's datetime and sorted
+                df['ChartDate'] = pd.to_datetime(df['ChartDate'])
+                df = df.sort_values(by='ChartDate')
             else:
-                st.error("❌ Critical: No 'DATE' column found.")
+                st.error("Critical Error: No 'DATE' column found in data.")
                 return
 
-            # B. Identify Price & Calculate Pct
+            # B. HANDLE PRICE & PCT (Drop old PCT, create new Pct)
             potential_cols = ['CLOSE', 'Close', 'Adj Close', 'ADJ CLOSE', 'Price', 'PRICE', 'Last', 'LAST']
             close_col = next((c for c in df.columns if c in potential_cols or c.upper() in potential_cols), None)
             
             if close_col:
-                # FORCE CREATION OF Pct
+                # If there is an existing 'PCT' or 'pct' column, drop it to avoid collision
+                cols_to_drop = [c for c in df.columns if c.upper() == 'PCT']
+                if cols_to_drop:
+                    df = df.drop(columns=cols_to_drop)
+
+                # Calculate fresh Pct on full history (Fixes the 2026/Jan 2nd math issue)
                 df['Pct'] = df[close_col].pct_change().fillna(0)
-                st.success(f"✅ Created 'Pct' from '{close_col}'")
                 
-                # UPDATE STATE
+                # Update Session State with this CLEAN dataframe
                 st.session_state.seas_single_df = df
             else:
-                st.error(f"❌ Critical: Could not find Price column.")
+                st.error("Critical Error: Could not find Price column.")
                 return
 
-            # DEBUG PRINT 2: Final Columns
-            st.write(f"**Final Columns (passed to utils):** {list(df.columns)}")
-            
             # --- 4. CONFIG DATES ---
-            min_y = df[d_col].dt.year.min()
-            max_y = df[d_col].dt.year.max()
+            try:
+                min_y = df['ChartDate'].dt.year.min()
+                max_y = df['ChartDate'].dt.year.max()
+            except: min_y, max_y = 2000, date.today().year
+
             def_start = max(min_y, max_y - ud.SEAS_DEFAULT_LOOKBACK_YEARS)
 
             with c2: start_year = st.number_input("Start Year", min_value=min_y, max_value=max_y, value=def_start, key="seas_start")
             with c3: end_year = st.number_input("End Year", min_value=start_year, max_value=max_y, value=max_y, key="seas_end")
 
-            # --- 5. CALCULATE STATS (WITH TRACEBACK) ---
-            st.write("⏳ Calling 'ud.calculate_seasonality_stats'...")
-            try:
-                stats = ud.calculate_seasonality_stats(df, start_year, end_year)
-                st.success("✅ Stats calculated successfully!")
-            except Exception as e:
-                st.error(f"❌ CRASH IN UTILS: {str(e)}")
-                st.code(traceback.format_exc())
-                return
+            # --- 5. CALCULATE STATS ---
+            # Now passing a clean dataframe with unique column names
+            stats = ud.calculate_seasonality_stats(df, start_year, end_year)
             
-            st.write("--- END DEBUG ---")
-
-            # ... Rest of the app logic (Only runs if no crash) ...
             if not stats: st.warning("Insufficient data.")
             else:
                 avg_stats = stats['avg_stats']
@@ -904,9 +902,11 @@ def run_seasonality_app(df_global):
                 current_month = date.today().month
                 current_year = date.today().year
                 
-                df_curr_year_safe = df[df[d_col].dt.year == current_year].copy()
-                df_curr_year_safe['Month'] = df_curr_year_safe[d_col].dt.month
+                # Use 'ChartDate' which we know exists now
+                df_curr_year_safe = df[df['ChartDate'].dt.year == current_year].copy()
+                df_curr_year_safe['Month'] = df_curr_year_safe['ChartDate'].dt.month
                 
+                # Calculate Compounded Return for current month
                 cur_val = df_curr_year_safe.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1).reindex(range(1, 13)).get(current_month, 0.0)
                 
                 if pd.isna(cur_val): cur_val = 0.0
@@ -984,9 +984,81 @@ def run_seasonality_app(df_global):
                     return f'background-color: {bg_color}; color: {color}; font-weight: 500;'
                 heatmap_config = {c: st.column_config.Column(width="small") for c in full_pivot.columns}
                 st.dataframe(full_pivot.style.format(ud.fmt_finance_str).applymap(color_map), use_container_width=True, height=(len(full_pivot)+1)*35+3, column_config=heatmap_config)
-    
+
     with tab_scan:
-        st.write("Scanner temporarily disabled during debug mode.")
+        with st.expander("ℹ️ Page Notes: Methodology & Metrics"):
+            st.markdown(f"""**🚀 Rolling Forward Returns**\n* **Methodology**: Scans history for dates matching the Start Date (+/- {ud.SEAS_SCAN_WINDOW_DAYS} days) and calculates performance for future periods.\n* **Mean Reversion (Arbitrage)**: Looks for tickers with **Positive Seasonality** (Forward 21d EV > {ud.SEAS_ARB_EV_THRESH}%) but **Negative Recent Performance** (Trailing 21d < {ud.SEAS_ARB_RECENT_THRESH}%).""")
+
+        st.subheader("🚀 High-EV Seasonality Scanner")
+        sc1, sc2, sc3 = st.columns([1, 1, 1])
+        with sc1: scan_date = st.date_input("Start Date for Scan", value=date.today(), key="seas_scan_date")
+        with sc2:
+            min_mc_scan = st.selectbox("Min Market Cap", list(ud.SEAS_SCAN_MC_OPTIONS.keys()), index=2, key="seas_scan_mc")
+            mc_thresh_val = ud.SEAS_SCAN_MC_OPTIONS[min_mc_scan]
+        with sc3:
+            scan_lookback = st.number_input("Lookback Years", min_value=ud.SEAS_SCAN_MIN_YEARS, max_value=ud.SEAS_SCAN_MAX_YEARS, value=ud.SEAS_SCAN_DEFAULT_YEARS, key="seas_scan_lb")
+            
+        start_scan = st.button("Run Scanner")
+        
+        if start_scan:
+            ticker_map = ud.load_ticker_map()
+            if not ticker_map: st.error("No TICKER_MAP found in secrets.")
+            else:
+                progress_bar = st.progress(0, text="Scanning tickers...")
+                res_df, all_csv_rows = ud.run_seasonality_scan(ticker_map, scan_date, scan_lookback, mc_thresh_val)
+                progress_bar.empty()
+                if res_df.empty:
+                    st.warning("No opportunities found.")
+                    st.session_state.seas_scan_results = None
+                else:
+                    st.session_state.seas_scan_results = res_df
+                    st.session_state.seas_scan_csvs = all_csv_rows
+                    st.session_state.seas_scan_active = True
+
+        if st.session_state.seas_scan_active and st.session_state.seas_scan_results is not None:
+            res_df = st.session_state.seas_scan_results
+            all_csv_rows = st.session_state.seas_scan_csvs
+            st.write("---")
+            def highlight_ev(val):
+                if pd.isna(val): return ""
+                color = "#1f7a1f" if val > 0 else "#a11f1f"
+                bg = "rgba(113, 210, 138, 0.25)" if val > 0 else "rgba(242, 156, 160, 0.25)"
+                return f'background-color: {bg}; color: {color}; font-weight: bold;'
+            def color_sharpe(val):
+                if pd.isna(val): return ""
+                if val < 1.0: return "background-color: #ffccbc; color: black"
+                if val < 2.0: return "background-color: #fff9c4; color: black"
+                if val < 3.0: return "background-color: #c8e6c9; color: black"
+                return "background-color: #81c784; color: black"
+
+            st.subheader(f"🗓️ Forward Returns (from {scan_date.strftime('%d %b')})")
+            c_scan1, c_scan2 = st.columns(2)
+            c_scan3, c_scan4 = st.columns(2)
+            fixed_height = ud.SEAS_TABLE_HEIGHT
+
+            for col_obj, p_label, sort_col, sharpe_col, p_key in [
+                (c_scan1, "**+21 Trading Days**", "21d_EV", "21d_Sharpe", "21d"),
+                (c_scan2, "**+42 Trading Days**", "42d_EV", "42d_Sharpe", "42d"),
+                (c_scan3, "**+63 Trading Days**", "63d_EV", "63d_Sharpe", "63d"),
+                (c_scan4, "**+126 Trading Days**", "126d_EV", "126d_Sharpe", "126d")
+            ]:
+                with col_obj:
+                    st.markdown(p_label)
+                    if all_csv_rows[p_key]:
+                        df_details = pd.DataFrame(all_csv_rows[p_key]).sort_values(by=["Ticker", "Start Date"])
+                        csv_data = df_details.to_csv(index=False).encode('utf-8')
+                        st.download_button(label=f"💾 Download CSV", data=csv_data, file_name=f"seasonality_{p_key}_inputs_{scan_date.strftime('%Y%m%d')}.csv", mime="text/csv", key=f"dl_btn_{p_key}")
+                    top_df = res_df.sort_values(by=sort_col, ascending=False).head(20)
+                    st.dataframe(top_df[['Ticker', sort_col, sort_col.replace('EV','WR'), sharpe_col]].style.format({sort_col: ud.fmt_finance_str, sort_col.replace('EV','WR'): "{:.1f}%", sharpe_col: "{:.2f}"}).applymap(highlight_ev, subset=[sort_col]).applymap(color_sharpe, subset=[sharpe_col]), use_container_width=True, hide_index=True, height=fixed_height, column_config={sharpe_col: st.column_config.NumberColumn("Sharpe", help="Consistency Score (EV / StdDev). >2 is very consistent.")})
+
+            st.write("---")
+            arb_df = res_df[(res_df['21d_EV'] > ud.SEAS_ARB_EV_THRESH) & (res_df['Recent_21d'] < ud.SEAS_ARB_RECENT_THRESH)].copy()
+            if not arb_df.empty:
+                st.subheader("💎 Arbitrage / Catch-Up Candidates")
+                st.caption(f"Stocks with strong historical seasonality (EV > {ud.SEAS_ARB_EV_THRESH}%) that are currently beaten down (Recent < {ud.SEAS_ARB_RECENT_THRESH}%).")
+                arb_df['Anomaly_Score'] = arb_df['Hist_Lag_21d'] - arb_df['Recent_21d']
+                arb_display = arb_df.sort_values(by='Anomaly_Score', ascending=False).head(15)
+                st.dataframe(arb_display[['Ticker', 'Recent_21d', 'Hist_Lag_21d', '21d_EV', '21d_WR']].style.format({'Recent_21d': ud.fmt_finance_str, 'Hist_Lag_21d': ud.fmt_finance_str, '21d_EV': ud.fmt_finance_str, '21d_WR': "{:.1f}%"}).applymap(lambda x: 'color: #d32f2f; font-weight:bold;', subset=['Recent_21d']).applymap(lambda x: 'color: #2e7d32; font-weight:bold;', subset=['21d_EV']), use_container_width=True, hide_index=True, column_config={"Ticker": st.column_config.TextColumn("Ticker", width=None), "Recent_21d": st.column_config.TextColumn("Recent 21d (Actual)", help="How the stock performed in the last 21 days."), "Hist_Lag_21d": st.column_config.TextColumn("Hist. Trailing 21d (Avg)", help="How the stock USUALLY performs during this trailing 21 day period."), "21d_EV": st.column_config.TextColumn("Hist. Forward 21d (EV)", help="How the stock usually performs in the NEXT 21 days.")})
 
 def run_ema_distance_app(df_global):
     st.title("📏 EMA Distance Analysis")
