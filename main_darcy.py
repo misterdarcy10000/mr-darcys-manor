@@ -823,6 +823,17 @@ def run_seasonality_app(df_global):
         if (ticker_input != st.session_state.seas_single_last_ticker) or (st.session_state.seas_single_df is None):
             with st.spinner(f"Fetching history for {ticker_input}..."):
                 fetched_df = ud.fetch_history_optimized(ticker_input, ticker_map)
+                
+                # --- FIX 1: FORCE GLOBAL PCT CALCULATION ---
+                # We calculate returns on the FULL history immediately.
+                # This ensures Jan 2nd correctly sees Dec 31st as its previous day.
+                if fetched_df is not None and not fetched_df.empty:
+                    # Handle lowercase/uppercase column naming issues safely
+                    col_map = {c: c for c in fetched_df.columns}
+                    close_col = next((c for c in fetched_df.columns if c.upper() == 'CLOSE'), None)
+                    if close_col:
+                        fetched_df['Pct'] = fetched_df[close_col].pct_change().fillna(0)
+                
                 st.session_state.seas_single_df = fetched_df
                 st.session_state.seas_single_last_ticker = ticker_input
         df = st.session_state.seas_single_df
@@ -850,15 +861,27 @@ def run_seasonality_app(df_global):
             else:
                 avg_stats = stats['avg_stats']
                 win_rates = stats['win_rates']
-                curr_df = stats['curr_df']
+                # curr_df might have lost the correct Pct if utils recalculated it.
+                # We use the main 'df' for safety on current year calculations.
+                curr_df = stats['curr_df'] 
                 hist_df = stats['hist_df']
                 
                 current_month = date.today().month
                 current_year = date.today().year
                 
-                # --- FIX 1: Geometric Compounding for Text Display ---
-                # Was: .sum()
-                cur_val = curr_df.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1).reindex(range(1, 13)).get(current_month, 0.0)
+                # --- FIX 2: ROBUST CURRENT MONTH CALCULATION ---
+                # Instead of relying on 'curr_df' from utils (which might be sliced), 
+                # we calculate directly from the main df where we forced the Pct calc.
+                d_col_main = next((c for c in df.columns if 'DATE' in c.upper()), 'Date')
+                
+                # Filter main DF for current year to ensure Pct values are preserved
+                df_curr_year_safe = df[pd.to_datetime(df[d_col_main]).dt.year == current_year].copy()
+                
+                # Extract 'Month' for grouping
+                df_curr_year_safe['Month'] = pd.to_datetime(df_curr_year_safe[d_col_main]).dt.month
+                
+                # Geometric Compounding on the SAFE dataframe
+                cur_val = df_curr_year_safe.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1).reindex(range(1, 13)).get(current_month, 0.0)
                 
                 if pd.isna(cur_val): cur_val = 0.0
                 hist_avg = avg_stats.get(current_month, 0.0)
@@ -887,9 +910,8 @@ def run_seasonality_app(df_global):
                     hist_cumsum = avg_stats.cumsum()
                     line_data_hist = pd.DataFrame({'Month': range(1, 13), 'MonthName': ud.SEAS_MONTH_NAMES, 'Value': hist_cumsum.values, 'Type': f'Avg ({start_year}-{end_year})'})
                     
-                    # --- FIX 2: Geometric Compounding for Chart Lines ---
-                    # Was: .sum()
-                    curr_monthly_stats = curr_df.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1).reindex(range(1, 13)) 
+                    # --- FIX 3: Use SAFE dataframe for Chart Lines too ---
+                    curr_monthly_stats = df_curr_year_safe.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1).reindex(range(1, 13)) 
                     
                     curr_cumsum = curr_monthly_stats.cumsum()
                     valid_curr_indices = curr_monthly_stats.dropna().index
@@ -902,11 +924,12 @@ def run_seasonality_app(df_global):
                 with col_chart2:
                     st.subheader(f"📊 Monthly Returns")
                     hist_bar_data = pd.DataFrame({'Month': range(1, 13), 'MonthName': ud.SEAS_MONTH_NAMES, 'Value': avg_stats.values, 'Type': 'Historical Avg'})
-                    completed_curr_df = curr_df[curr_df['Month'] < current_month].copy()
+                    
+                    # --- FIX 4: Use SAFE dataframe for Monthly Bars ---
+                    completed_curr_df = df_curr_year_safe[df_curr_year_safe['Month'] < current_month].copy()
+                    
                     curr_bar_data = pd.DataFrame()
                     if not completed_curr_df.empty:
-                        # For completed past months, .mean() is usually fine for "average daily return", 
-                        # but for the bar chart we want "Total Month Return", so we should use the same logic here too:
                         curr_vals = completed_curr_df.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1)
                         curr_bar_data = pd.DataFrame({'Month': curr_vals.index, 'MonthName': [ud.SEAS_MONTH_NAMES[i-1] for i in curr_vals.index], 'Value': curr_vals.values, 'Type': f'{current_year} Actual'})
                     combined_bar_data = pd.concat([hist_bar_data, curr_bar_data])
@@ -926,7 +949,10 @@ def run_seasonality_app(df_global):
                     target_col.markdown(f"""<div style="background-color: rgba(128,128,128,0.05); border-radius: 8px; padding: 8px 5px; text-align: center; margin-bottom: 10px; border-bottom: 3px solid {border_color};"><div style="font-size: 0.85rem; font-weight: bold; color: #555;">{mn}</div><div style="font-size: 0.75rem; color: #888; margin-top:2px;">Win Rate</div><div style="font-size: 1.0rem; font-weight: 700;">{wr:.1f}%</div><div style="font-size: 0.75rem; color: #888; margin-top:2px;">Avg Rtn</div><div style="font-size: 0.9rem; font-weight: 600; color: {'#1f7a1f' if avg > 0 else '#a11f1f'};">{ud.fmt_finance_str(avg)}</div></div>""", unsafe_allow_html=True)
 
                 st.markdown("---"); st.subheader("🗓️ Monthly Returns Heatmap")
+                
+                # --- FIX 5: Use SAFE dataframe for Heatmap ---
                 full_pivot = ud.prepare_seasonality_heatmap(hist_df, completed_curr_df)
+                
                 def color_map(val):
                     if pd.isna(val): return ""
                     if val == 0: return "color: #888;"
