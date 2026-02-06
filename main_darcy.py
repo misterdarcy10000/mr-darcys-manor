@@ -820,12 +820,15 @@ def run_seasonality_app(df_global):
             return
 
         ticker_map = ud.load_ticker_map()
+        
+        # Check if we need to fetch new data
         if (ticker_input != st.session_state.seas_single_last_ticker) or (st.session_state.seas_single_df is None):
             with st.spinner(f"Fetching history for {ticker_input}..."):
                 fetched_df = ud.fetch_history_optimized(ticker_input, ticker_map)
                 st.session_state.seas_single_df = fetched_df
                 st.session_state.seas_single_last_ticker = ticker_input
         
+        # Load from Session State
         df = st.session_state.seas_single_df
 
         if df is None or df.empty: 
@@ -835,6 +838,7 @@ def run_seasonality_app(df_global):
             if 'Pct' not in df.columns:
                 close_col = next((c for c in df.columns if c.upper() == 'CLOSE'), None)
                 if close_col:
+                    # Calculate Pct on the full history immediately
                     df['Pct'] = df[close_col].pct_change().fillna(0)
                     st.session_state.seas_single_df = df # Update Session State
                 else:
@@ -871,6 +875,7 @@ def run_seasonality_app(df_global):
                 d_col_main = next((c for c in df.columns if 'DATE' in c.upper()), 'Date')
                 
                 # Filter main DF for current year to ensure Pct values are preserved
+                # This ensures Jan 2nd correctly sees Dec 31st as prev day
                 df_curr_year_safe = df[pd.to_datetime(df[d_col_main]).dt.year == current_year].copy()
                 df_curr_year_safe['Month'] = pd.to_datetime(df_curr_year_safe[d_col_main]).dt.month
                 
@@ -904,7 +909,7 @@ def run_seasonality_app(df_global):
                     hist_cumsum = avg_stats.cumsum()
                     line_data_hist = pd.DataFrame({'Month': range(1, 13), 'MonthName': ud.SEAS_MONTH_NAMES, 'Value': hist_cumsum.values, 'Type': f'Avg ({start_year}-{end_year})'})
                     
-                    # Chart Logic: Use SAFE dataframe
+                    # Chart Logic: Use SAFE dataframe with geometric compounding
                     curr_monthly_stats = df_curr_year_safe.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1).reindex(range(1, 13)) 
                     
                     curr_cumsum = curr_monthly_stats.cumsum()
@@ -919,7 +924,7 @@ def run_seasonality_app(df_global):
                     st.subheader(f"📊 Monthly Returns")
                     hist_bar_data = pd.DataFrame({'Month': range(1, 13), 'MonthName': ud.SEAS_MONTH_NAMES, 'Value': avg_stats.values, 'Type': 'Historical Avg'})
                     
-                    # Bar Logic: Use SAFE dataframe
+                    # Bar Logic: Use SAFE dataframe with geometric compounding
                     completed_curr_df = df_curr_year_safe[df_curr_year_safe['Month'] < current_month].copy()
                     
                     curr_bar_data = pd.DataFrame()
