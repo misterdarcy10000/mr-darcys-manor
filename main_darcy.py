@@ -828,43 +828,43 @@ def run_seasonality_app(df_global):
         if (ticker_input != st.session_state.seas_single_last_ticker) or (st.session_state.seas_single_df is None):
             with st.spinner(f"Fetching history for {ticker_input}..."):
                 fetched_df = ud.fetch_history_optimized(ticker_input, ticker_map)
-                # We save it immediately to state
                 st.session_state.seas_single_df = fetched_df
                 st.session_state.seas_single_last_ticker = ticker_input
         
-        # Get raw data from state
+        # Get raw data
         df_raw = st.session_state.seas_single_df
 
         if df_raw is None or df_raw.empty: 
             st.error(f"Could not load data for {ticker_input}. Check the ticker symbol.")
         else:
-            # --- 3. FIX: CALCULATE PCT GLOBALLY & UPDATE STATE ---
-            # We must modify the dataframe in the SESSION STATE directly, 
-            # otherwise 'ud.calculate_seasonality_stats' (which might look at state) won't see it.
-            
-            # Create a working copy
+            # --- 3. FIX: PREPARE DATA (Pct + ChartDate) ---
             df = df_raw.copy()
             df.columns = [c.strip() for c in df.columns]
             
-            # Identify Date and Sort (Crucial for correct Pct calculation)
+            # A. Identify & Fix Date Column
             d_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
             if d_col:
                 df[d_col] = pd.to_datetime(df[d_col])
                 df = df.sort_values(by=d_col)
+                
+                # [FIX 1] Create 'ChartDate' which is required by Utils
+                df['ChartDate'] = df[d_col]
+            else:
+                st.error("Critical Error: No 'DATE' column found.")
+                return
 
-            # Identify Price Column
+            # B. Identify Price & Calculate Pct
             potential_cols = ['CLOSE', 'Close', 'Adj Close', 'ADJ CLOSE', 'Price', 'PRICE', 'Last', 'LAST']
             close_col = next((c for c in df.columns if c in potential_cols or c.upper() in potential_cols), None)
             
             if close_col:
-                # Calculate Pct on the FULL history. 
-                # This ensures Jan 2, 2026 has a value relative to Dec 31, 2025.
+                # [FIX 2] Calculate 'Pct' on full history (Fixes 2026 Math)
                 df['Pct'] = df[close_col].pct_change().fillna(0)
                 
-                # UPDATE SESSION STATE WITH THE PCT COLUMN
+                # [FIX 3] Update Session State so Utils sees the new columns
                 st.session_state.seas_single_df = df
             else:
-                st.error(f"Critical Error: Could not find a 'Close' price column in data. Available columns: {list(df.columns)}")
+                st.error(f"Critical Error: Could not find a 'Close' price column. Available: {list(df.columns)}")
                 return
 
             # --- 4. CONFIG DATES ---
@@ -879,7 +879,7 @@ def run_seasonality_app(df_global):
             with c3: end_year = st.number_input("End Year (History)", min_value=start_year, max_value=max_y, value=max_y, key="seas_end")
 
             # --- 5. CALCULATE STATS ---
-            # We pass 'df', which we know has 'Pct' now.
+            # Pass 'df' which now has 'Pct', 'ChartDate', and is Sorted
             stats = ud.calculate_seasonality_stats(df, start_year, end_year)
             
             if not stats: st.warning("Insufficient data for calculation.")
@@ -891,14 +891,12 @@ def run_seasonality_app(df_global):
                 current_month = date.today().month
                 current_year = date.today().year
                 
-                # --- 6. CURRENT YEAR LOGIC FIX ---
-                # We filter the 'df' (which already has calculated Pct returns) for the current year.
+                # --- 6. CURRENT YEAR LOGIC ---
+                # Re-filter safely using the dataframe that has Pct
                 df_curr_year_safe = df[df[d_col].dt.year == current_year].copy()
                 df_curr_year_safe['Month'] = df_curr_year_safe[d_col].dt.month
                 
-                # Calculate Compounded Return for the current month
-                # Logic: We take all daily 'Pct' values for the month and compound them.
-                # Because 'Pct' was calculated globally, the first day of the month captures the gap from Dec 31st.
+                # Calculate Compounded Return
                 cur_val = df_curr_year_safe.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1).reindex(range(1, 13)).get(current_month, 0.0)
                 
                 if pd.isna(cur_val): cur_val = 0.0
@@ -929,7 +927,6 @@ def run_seasonality_app(df_global):
                     hist_cumsum = avg_stats.cumsum()
                     line_data_hist = pd.DataFrame({'Month': range(1, 13), 'MonthName': ud.SEAS_MONTH_NAMES, 'Value': hist_cumsum.values, 'Type': f'Avg ({start_year}-{end_year})'})
                     
-                    # Chart Logic
                     curr_monthly_stats = df_curr_year_safe.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1).reindex(range(1, 13)) 
                     curr_cumsum = curr_monthly_stats.cumsum()
                     valid_curr_indices = curr_monthly_stats.dropna().index
@@ -943,7 +940,6 @@ def run_seasonality_app(df_global):
                     st.subheader(f"📊 Monthly Returns")
                     hist_bar_data = pd.DataFrame({'Month': range(1, 13), 'MonthName': ud.SEAS_MONTH_NAMES, 'Value': avg_stats.values, 'Type': 'Historical Avg'})
                     
-                    # Bar Logic
                     completed_curr_df = df_curr_year_safe[df_curr_year_safe['Month'] < current_month].copy()
                     
                     curr_bar_data = pd.DataFrame()
@@ -968,7 +964,6 @@ def run_seasonality_app(df_global):
 
                 st.markdown("---"); st.subheader("🗓️ Monthly Returns Heatmap")
                 
-                # Heatmap Logic
                 full_pivot = ud.prepare_seasonality_heatmap(hist_df, completed_curr_df)
                 
                 def color_map(val):
