@@ -824,7 +824,7 @@ def run_seasonality_app(df_global):
 
         ticker_map = ud.load_ticker_map()
         
-        # --- 2. DATA LOADING & REPAIR ---
+        # --- 2. DATA LOADING ---
         # If ticker changed or data is missing, fetch fresh data
         if (ticker_input != st.session_state.seas_single_last_ticker) or (st.session_state.seas_single_df is None):
             with st.spinner(f"Fetching history for {ticker_input}..."):
@@ -832,13 +832,16 @@ def run_seasonality_app(df_global):
                 st.session_state.seas_single_df = fetched_df
                 st.session_state.seas_single_last_ticker = ticker_input
         
-        # Load from Session State
-        df = st.session_state.seas_single_df
+        # Load from Session State (Get the Raw Data)
+        df_raw = st.session_state.seas_single_df
 
-        # --- 3. THE FIX: FORCE 'Pct' COLUMN CREATION ---
-        if df is None or df.empty: 
+        # --- 3. THE FIX: ROBUST COLUMN CREATION ---
+        if df_raw is None or df_raw.empty: 
             st.error(f"Could not load data for {ticker_input}. Check the ticker symbol.")
         else:
+            # [CRITICAL FIX] Work on a COPY to ensure 'Pct' is attached to the object we use
+            df = df_raw.copy()
+            
             # Clean column names (strip whitespace) to avoid 'Close ' errors
             df.columns = [c.strip() for c in df.columns]
             
@@ -847,21 +850,20 @@ def run_seasonality_app(df_global):
             close_col = next((c for c in df.columns if c in potential_cols or c.upper() in potential_cols), None)
             
             if close_col:
-                # Always recalculate Pct to ensure it covers the full range (Dec 31 -> Jan 1 gap)
+                # Always recalculate Pct on this specific instance
                 df['Pct'] = df[close_col].pct_change().fillna(0)
-                st.session_state.seas_single_df = df # Save repaired DF back to state
             else:
                 st.error(f"Critical Error: Could not find a 'Close' price column in data. Available columns: {list(df.columns)}")
                 return
 
             # --- 4. PREPARE DATES ---
             try:
-                temp_df = df.copy()
-                d_col = next((c for c in temp_df.columns if 'DATE' in c.upper()), None)
+                # Use 'df' here, which we know has 'Pct'
+                d_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
                 if d_col: 
-                    temp_df[d_col] = pd.to_datetime(temp_df[d_col])
-                    min_y = temp_df[d_col].dt.year.min()
-                    max_y = temp_df[d_col].dt.year.max()
+                    df[d_col] = pd.to_datetime(df[d_col])
+                    min_y = df[d_col].dt.year.min()
+                    max_y = df[d_col].dt.year.max()
                 else: min_y, max_y = 2000, date.today().year
             except: min_y, max_y = 2000, date.today().year
 
@@ -871,6 +873,7 @@ def run_seasonality_app(df_global):
             with c3: end_year = st.number_input("End Year (History)", min_value=start_year, max_value=max_y, value=max_y, key="seas_end")
 
             # --- 5. CALCULATE STATS ---
+            # Pass the 'df' that we explicitly added 'Pct' to just now
             stats = ud.calculate_seasonality_stats(df, start_year, end_year)
             
             if not stats: st.warning("Insufficient data for calculation.")
@@ -882,8 +885,7 @@ def run_seasonality_app(df_global):
                 current_month = date.today().month
                 current_year = date.today().year
                 
-                # --- 6. GEOMETRIC COMPOUNDING (FIXED) ---
-                # Use the SAFE dataframe (df) which we guaranteed has 'Pct' above.
+                # --- 6. GEOMETRIC COMPOUNDING ---
                 d_col_main = next((c for c in df.columns if 'DATE' in c.upper()), 'Date')
                 
                 # Filter for current year
@@ -891,6 +893,7 @@ def run_seasonality_app(df_global):
                 df_curr_year_safe['Month'] = pd.to_datetime(df_curr_year_safe[d_col_main]).dt.month
                 
                 # Calculate Compounded Return: (1+r) * (1+r) ... - 1
+                # This previously crashed if 'Pct' was missing
                 cur_val = df_curr_year_safe.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1).reindex(range(1, 13)).get(current_month, 0.0)
                 
                 if pd.isna(cur_val): cur_val = 0.0
