@@ -801,6 +801,8 @@ def run_rsi_scanner_app(df_global):
 
 def run_seasonality_app(df_global):
     st.title("📅 Seasonality")
+    
+    # --- 1. SESSION STATE SETUP ---
     if 'seas_single_df' not in st.session_state: st.session_state.seas_single_df = None
     if 'seas_single_last_ticker' not in st.session_state: st.session_state.seas_single_last_ticker = ""
     if 'seas_scan_results' not in st.session_state: st.session_state.seas_scan_results = None
@@ -815,44 +817,44 @@ def run_seasonality_app(df_global):
 
         c1, c2, c3 = st.columns([1, 1, 1])
         with c1: ticker_input = st.text_input("Ticker", value="SPY", key="seas_ticker").strip().upper()
+        
         if not ticker_input:
             st.info("Please enter a ticker symbol.")
             return
 
         ticker_map = ud.load_ticker_map()
         
-        # 1. Check if we need to fetch NEW data (Ticker changed or Data is missing)
+        # --- 2. DATA LOADING & REPAIR ---
+        # If ticker changed or data is missing, fetch fresh data
         if (ticker_input != st.session_state.seas_single_last_ticker) or (st.session_state.seas_single_df is None):
             with st.spinner(f"Fetching history for {ticker_input}..."):
                 fetched_df = ud.fetch_history_optimized(ticker_input, ticker_map)
-                
-                # IMMEDIATE FIX: Calculate 'Pct' right after fetching
-                if fetched_df is not None and not fetched_df.empty:
-                    close_col = next((c for c in fetched_df.columns if c.upper() == 'CLOSE'), None)
-                    if close_col:
-                        fetched_df['Pct'] = fetched_df[close_col].pct_change().fillna(0)
-                
                 st.session_state.seas_single_df = fetched_df
                 st.session_state.seas_single_last_ticker = ticker_input
         
-        # 2. Load the DataFrame from Session State
+        # Load from Session State
         df = st.session_state.seas_single_df
 
+        # --- 3. THE FIX: FORCE 'Pct' COLUMN CREATION ---
         if df is None or df.empty: 
             st.error(f"Could not load data for {ticker_input}. Check the ticker symbol.")
         else:
-            # 3. SELF-HEALING BLOCK: Check if 'Pct' is missing (from old cache) and fix it
-            if 'Pct' not in df.columns:
-                close_col = next((c for c in df.columns if c.upper() == 'CLOSE'), None)
-                if close_col:
-                    df['Pct'] = df[close_col].pct_change().fillna(0)
-                    st.session_state.seas_single_df = df # Save the fix back to session state
-                else:
-                    # If we can't fix it, force a reload
-                    st.warning("Data schema mismatch. Refreshing data...")
-                    del st.session_state.seas_single_df
-                    st.rerun()
+            # Clean column names (strip whitespace) to avoid 'Close ' errors
+            df.columns = [c.strip() for c in df.columns]
+            
+            # Identify the Price Column (Handle Case Sensitivity)
+            potential_cols = ['CLOSE', 'Close', 'Adj Close', 'ADJ CLOSE', 'Price', 'PRICE', 'Last', 'LAST']
+            close_col = next((c for c in df.columns if c in potential_cols or c.upper() in potential_cols), None)
+            
+            if close_col:
+                # Always recalculate Pct to ensure it covers the full range (Dec 31 -> Jan 1 gap)
+                df['Pct'] = df[close_col].pct_change().fillna(0)
+                st.session_state.seas_single_df = df # Save repaired DF back to state
+            else:
+                st.error(f"Critical Error: Could not find a 'Close' price column in data. Available columns: {list(df.columns)}")
+                return
 
+            # --- 4. PREPARE DATES ---
             try:
                 temp_df = df.copy()
                 d_col = next((c for c in temp_df.columns if 'DATE' in c.upper()), None)
@@ -863,13 +865,14 @@ def run_seasonality_app(df_global):
                 else: min_y, max_y = 2000, date.today().year
             except: min_y, max_y = 2000, date.today().year
 
-            # UPDATED: Constant
             def_start = max(min_y, max_y - ud.SEAS_DEFAULT_LOOKBACK_YEARS)
 
             with c2: start_year = st.number_input("Start Year (History)", min_value=min_y, max_value=max_y, value=def_start, key="seas_start")
             with c3: end_year = st.number_input("End Year (History)", min_value=start_year, max_value=max_y, value=max_y, key="seas_end")
 
+            # --- 5. CALCULATE STATS ---
             stats = ud.calculate_seasonality_stats(df, start_year, end_year)
+            
             if not stats: st.warning("Insufficient data for calculation.")
             else:
                 avg_stats = stats['avg_stats']
@@ -879,15 +882,15 @@ def run_seasonality_app(df_global):
                 current_month = date.today().month
                 current_year = date.today().year
                 
-                # --- CALCULATION: Use SAFE dataframe for Current Year (Compounded) ---
+                # --- 6. GEOMETRIC COMPOUNDING (FIXED) ---
+                # Use the SAFE dataframe (df) which we guaranteed has 'Pct' above.
                 d_col_main = next((c for c in df.columns if 'DATE' in c.upper()), 'Date')
                 
-                # Filter main DF for current year to ensure Pct values are preserved
-                # This ensures Jan 2nd correctly sees Dec 31st as prev day for calc
+                # Filter for current year
                 df_curr_year_safe = df[pd.to_datetime(df[d_col_main]).dt.year == current_year].copy()
                 df_curr_year_safe['Month'] = pd.to_datetime(df_curr_year_safe[d_col_main]).dt.month
                 
-                # Geometric Compounding on the SAFE dataframe
+                # Calculate Compounded Return: (1+r) * (1+r) ... - 1
                 cur_val = df_curr_year_safe.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1).reindex(range(1, 13)).get(current_month, 0.0)
                 
                 if pd.isna(cur_val): cur_val = 0.0
@@ -917,7 +920,7 @@ def run_seasonality_app(df_global):
                     hist_cumsum = avg_stats.cumsum()
                     line_data_hist = pd.DataFrame({'Month': range(1, 13), 'MonthName': ud.SEAS_MONTH_NAMES, 'Value': hist_cumsum.values, 'Type': f'Avg ({start_year}-{end_year})'})
                     
-                    # Chart Logic: Use SAFE dataframe with geometric compounding
+                    # Chart Logic: Geometric Compounding
                     curr_monthly_stats = df_curr_year_safe.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1).reindex(range(1, 13)) 
                     
                     curr_cumsum = curr_monthly_stats.cumsum()
@@ -932,7 +935,7 @@ def run_seasonality_app(df_global):
                     st.subheader(f"📊 Monthly Returns")
                     hist_bar_data = pd.DataFrame({'Month': range(1, 13), 'MonthName': ud.SEAS_MONTH_NAMES, 'Value': avg_stats.values, 'Type': 'Historical Avg'})
                     
-                    # Bar Logic: Use SAFE dataframe with geometric compounding
+                    # Bar Logic: Geometric Compounding
                     completed_curr_df = df_curr_year_safe[df_curr_year_safe['Month'] < current_month].copy()
                     
                     curr_bar_data = pd.DataFrame()
@@ -957,7 +960,7 @@ def run_seasonality_app(df_global):
 
                 st.markdown("---"); st.subheader("🗓️ Monthly Returns Heatmap")
                 
-                # Heatmap Logic: Use SAFE dataframe
+                # Heatmap Logic
                 full_pivot = ud.prepare_seasonality_heatmap(hist_df, completed_curr_df)
                 
                 def color_map(val):
@@ -980,7 +983,6 @@ def run_seasonality_app(df_global):
             min_mc_scan = st.selectbox("Min Market Cap", list(ud.SEAS_SCAN_MC_OPTIONS.keys()), index=2, key="seas_scan_mc")
             mc_thresh_val = ud.SEAS_SCAN_MC_OPTIONS[min_mc_scan]
         with sc3:
-            # UPDATED: Constants
             scan_lookback = st.number_input("Lookback Years", min_value=ud.SEAS_SCAN_MIN_YEARS, max_value=ud.SEAS_SCAN_MAX_YEARS, value=ud.SEAS_SCAN_DEFAULT_YEARS, key="seas_scan_lb")
             
         start_scan = st.button("Run Scanner")
@@ -1019,7 +1021,6 @@ def run_seasonality_app(df_global):
             st.subheader(f"🗓️ Forward Returns (from {scan_date.strftime('%d %b')})")
             c_scan1, c_scan2 = st.columns(2)
             c_scan3, c_scan4 = st.columns(2)
-            # UPDATED: Table Height Constant
             fixed_height = ud.SEAS_TABLE_HEIGHT
 
             for col_obj, p_label, sort_col, sharpe_col, p_key in [
