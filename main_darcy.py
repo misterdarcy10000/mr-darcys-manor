@@ -825,46 +825,48 @@ def run_seasonality_app(df_global):
         ticker_map = ud.load_ticker_map()
         
         # --- 2. DATA LOADING ---
-        # If ticker changed or data is missing, fetch fresh data
         if (ticker_input != st.session_state.seas_single_last_ticker) or (st.session_state.seas_single_df is None):
             with st.spinner(f"Fetching history for {ticker_input}..."):
                 fetched_df = ud.fetch_history_optimized(ticker_input, ticker_map)
                 st.session_state.seas_single_df = fetched_df
                 st.session_state.seas_single_last_ticker = ticker_input
         
-        # Load from Session State (Get the Raw Data)
+        # Get raw data
         df_raw = st.session_state.seas_single_df
 
-        # --- 3. THE FIX: GLOBAL PCT CALCULATION ---
         if df_raw is None or df_raw.empty: 
             st.error(f"Could not load data for {ticker_input}. Check the ticker symbol.")
         else:
-            # Create a local copy to work with
+            # --- 3. CRITICAL FIX: PREPARE DATA & UPDATE STATE ---
             df = df_raw.copy()
             
-            # Clean column names
+            # A. Clean Columns
             df.columns = [c.strip() for c in df.columns]
             
-            # Identify the Price Column
+            # B. Sort by Date (Essential for pct_change to work correctly)
+            d_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
+            if d_col:
+                df[d_col] = pd.to_datetime(df[d_col])
+                df = df.sort_values(by=d_col)
+            
+            # C. Identify Price Column
             potential_cols = ['CLOSE', 'Close', 'Adj Close', 'ADJ CLOSE', 'Price', 'PRICE', 'Last', 'LAST']
             close_col = next((c for c in df.columns if c in potential_cols or c.upper() in potential_cols), None)
             
             if close_col:
-                # [CRITICAL] Calculate Pct on the FULL dataset immediately. 
-                # This ensures Jan 2nd gets the correct return relative to Dec 31st.
+                # D. Calculate Pct on Full History (Captures Dec->Jan moves correctly)
                 df['Pct'] = df[close_col].pct_change().fillna(0)
+                
+                # E. [FIX] Update Session State so Utils can see the 'Pct' column
+                st.session_state.seas_single_df = df
             else:
-                st.error(f"Critical Error: Could not find a 'Close' price column in data. Available columns: {list(df.columns)}")
+                st.error(f"Critical Error: Could not find a 'Close' price column. Available: {list(df.columns)}")
                 return
 
-            # --- 4. PREPARE DATES ---
+            # --- 4. CONFIG DATES ---
             try:
-                d_col = next((c for c in df.columns if 'DATE' in c.upper()), None)
-                if d_col: 
-                    df[d_col] = pd.to_datetime(df[d_col])
-                    min_y = df[d_col].dt.year.min()
-                    max_y = df[d_col].dt.year.max()
-                else: min_y, max_y = 2000, date.today().year
+                min_y = df[d_col].dt.year.min()
+                max_y = df[d_col].dt.year.max()
             except: min_y, max_y = 2000, date.today().year
 
             def_start = max(min_y, max_y - ud.SEAS_DEFAULT_LOOKBACK_YEARS)
@@ -873,7 +875,7 @@ def run_seasonality_app(df_global):
             with c3: end_year = st.number_input("End Year (History)", min_value=start_year, max_value=max_y, value=max_y, key="seas_end")
 
             # --- 5. CALCULATE STATS ---
-            # Pass the 'df' that DEFINITELY has the global 'Pct' column
+            # Now passing 'df' which definitely has 'Pct', and State is also updated
             stats = ud.calculate_seasonality_stats(df, start_year, end_year)
             
             if not stats: st.warning("Insufficient data for calculation.")
@@ -885,14 +887,12 @@ def run_seasonality_app(df_global):
                 current_month = date.today().month
                 current_year = date.today().year
                 
-                # --- 6. GEOMETRIC COMPOUNDING ---
-                d_col_main = next((c for c in df.columns if 'DATE' in c.upper()), 'Date')
+                # --- 6. CURRENT YEAR LOGIC (GEOMETRIC) ---
+                # Re-filter from the main 'df' to ensure we have the Pct column we just created
+                df_curr_year_safe = df[df[d_col].dt.year == current_year].copy()
+                df_curr_year_safe['Month'] = df_curr_year_safe[d_col].dt.month
                 
-                # Filter for current year using the SAFE df (with global Pct)
-                df_curr_year_safe = df[pd.to_datetime(df[d_col_main]).dt.year == current_year].copy()
-                df_curr_year_safe['Month'] = pd.to_datetime(df_curr_year_safe[d_col_main]).dt.month
-                
-                # Calculate Compounded Return: (1+r) * (1+r) ... - 1
+                # Compounded Return: (1+r)*(1+r)... - 1
                 cur_val = df_curr_year_safe.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1).reindex(range(1, 13)).get(current_month, 0.0)
                 
                 if pd.isna(cur_val): cur_val = 0.0
@@ -908,6 +908,7 @@ def run_seasonality_app(df_global):
                 nm_avg = avg_stats.get(idx_next, 0.0)
                 nm_wr = win_rates.get(idx_next, 0.0)
                 nnm_avg = avg_stats.get(idx_next_2, 0.0)
+                
                 if nm_avg >= 1.5 and nm_wr >= 65: positioning = "🚀 <b>Strong Bullish.</b> Historically a standout month."
                 elif nm_avg > 0 and nm_wr >= 50: positioning = "↗️ <b>Mildly Bullish.</b> Positive bias, moderate conviction."
                 elif nm_avg < 0 and nm_avg > -1.0: positioning = "⚠️ <b>Choppy/Weak.</b> Historically drags or trends flat."
@@ -924,7 +925,6 @@ def run_seasonality_app(df_global):
                     
                     # Chart Logic: Geometric Compounding
                     curr_monthly_stats = df_curr_year_safe.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1).reindex(range(1, 13)) 
-                    
                     curr_cumsum = curr_monthly_stats.cumsum()
                     valid_curr_indices = curr_monthly_stats.dropna().index
                     line_data_curr = pd.DataFrame({'Month': valid_curr_indices, 'MonthName': [ud.SEAS_MONTH_NAMES[i-1] for i in valid_curr_indices], 'Value': curr_cumsum.loc[valid_curr_indices].values, 'Type': f'Current Year ({current_year})'})
@@ -942,7 +942,6 @@ def run_seasonality_app(df_global):
                     
                     curr_bar_data = pd.DataFrame()
                     if not completed_curr_df.empty:
-                        # Correctly apply prod() - 1 for actual monthly returns
                         curr_vals = completed_curr_df.groupby('Month')['Pct'].apply(lambda x: (1 + x).prod() - 1)
                         curr_bar_data = pd.DataFrame({'Month': curr_vals.index, 'MonthName': [ud.SEAS_MONTH_NAMES[i-1] for i in curr_vals.index], 'Value': curr_vals.values, 'Type': f'{current_year} Actual'})
                     combined_bar_data = pd.concat([hist_bar_data, curr_bar_data])
