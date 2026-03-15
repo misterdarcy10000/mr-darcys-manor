@@ -801,7 +801,6 @@ def run_rsi_scanner_app(df_global):
 
 import traceback
 
-
 def run_seasonality_app(ticker_map, scan_date, scan_lookback, mc_thresh_val):
     all_tickers = [k for k in ticker_map.keys() if not k.upper().endswith('_PARQUET')]
     valid_tickers = []
