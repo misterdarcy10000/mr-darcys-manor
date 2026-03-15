@@ -132,23 +132,35 @@ def load_ticker_map():
     try:
         url = st.secrets.get("URL_TICKER_MAP")
         if not url: 
-            return {} # Secret is genuinely missing
+            return {}
             
+        # Detect if it's a Google Sheets link
+        if "docs.google.com/spreadsheets" in url:
+            # Extract the ID and transform it into a direct CSV export link
+            sheet_id_match = re.search(r'/d/([a-zA-Z0-9_-]+)', url)
+            if sheet_id_match:
+                sheet_id = sheet_id_match.group(1)
+                # This is the correct endpoint for native Google Sheets
+                export_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+                response = GLOBAL_SESSION.get(export_url, timeout=15)
+                if response.status_code == 200:
+                    df = pd.read_csv(BytesIO(response.content), engine='c')
+                    if len(df.columns) >= 2:
+                        return dict(zip(df.iloc[:, 0].astype(str).str.strip().str.upper(), 
+                                        df.iloc[:, 1].astype(str).str.strip()))
+        
+        # Fallback to standard Drive file downloader for CSVs/Parquets
         buffer = get_gdrive_binary_data(url)
-        if not buffer:
-            st.error(f"⚠️ TICKER_MAP Download Failed. Please verify Google Drive permissions ('Anyone with the link' can view). URL: {url}")
-            return {}
-            
-        df = pd.read_csv(buffer, engine='c')
-        if len(df.columns) >= 2:
-            return dict(zip(df.iloc[:, 0].astype(str).str.strip().str.upper(), df.iloc[:, 1].astype(str).str.strip()))
-        else:
-            st.error("⚠️ TICKER_MAP downloaded, but couldn't read the columns.")
-            return {}
-            
-    except Exception as e: 
-        st.error(f"⚠️ Error parsing TICKER_MAP: {e}")
-        return {}
+        if buffer:
+            df = pd.read_csv(buffer, engine='c')
+            if len(df.columns) >= 2:
+                return dict(zip(df.iloc[:, 0].astype(str).str.strip().str.upper(), 
+                                df.iloc[:, 1].astype(str).str.strip()))
+                
+    except Exception as e:
+        st.error(f"⚠️ Error loading TICKER_MAP: {e}")
+        
+    return {}
 
 def add_technicals(df):
     """
