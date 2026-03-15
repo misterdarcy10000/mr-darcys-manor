@@ -1008,121 +1008,201 @@ def run_seasonality_app(df_global):
 def run_ema_distance_app(df_global):
     st.title("📏 EMA Distance Analysis")
     
-    # Removed the toggle, just ask for Ticker and Years
-    col_in1, col_in2, _ = st.columns([1, 1, 2])
-    with col_in1:
-        ticker = st.text_input("Ticker", value=ud.EMA_DIST_DEFAULT_TICKER).upper().strip()
-    with col_in2:
-        years_back = st.number_input("Years to Analyze", min_value=1, max_value=20, value=ud.EMA_DIST_DEFAULT_YEARS, step=1)
+    # Create the two tabs
+    tab1, tab2 = st.tabs(["Single Ticker Deep Dive", "Bulk Extreme Scanner"])
     
-    if not ticker:
-        st.warning("Please enter a ticker.")
-        return
-
-    with st.spinner(f"Crunching data for {ticker}..."):
-        df_clean = ud.calculate_ema_distance_data(ticker, years_back)
-        if df_clean is None: return
-
-    close_col = 'CLOSE' if 'CLOSE' in df_clean.columns else 'Close'
-    low_col = 'LOW' if 'LOW' in df_clean.columns else 'Low'
-    high_col = 'HIGH' if 'HIGH' in df_clean.columns else 'High'
-    date_col = next((c for c in df_clean.columns if 'DATE' in c), "DATE")
-    
-    current_price = df_clean[close_col].iloc[-1]
-    current_ema8 = df_clean['EMA_8'].iloc[-1]
-    current_dist_50 = df_clean['Dist_50'].iloc[-1]
-
-    st.subheader(f"{ticker} vs Moving Avgs & Percentiles")
-    with st.expander("ℹ️ Table User Guide"):
-        st.markdown(f"""**1. Key Metrics Tracked.**\nThe app calculates the percentage distance (the "Gap") between the current price and five different moving averages.\n\n**2. The "Rubber Band" Logic (Percentiles).**\nRather than just showing the current gap, the app looks at {years_back} years of history for that specific ticker to see how rare the current gap is.\n\n**3. Visual Highlighting System.**\nThe table uses a traffic-light system to categorize the current price action:\n* 🟢 **Extreme Buy (Green):** Gap $\le$ p10. The stock is historically over-sold and due for a bounce.\n* 🔴 **Extreme Sell (Red):** Gap $\ge$ p90. The stock is historically over-bought and due for a pullback.\n* ↗️ **Healthy Pullback:** Gap is near the median (p50) but price remains above the 8-EMA.""")
-
-    stats_data = []
-    thresholds = {} 
-    metrics = [("Close vs 8-EMA", df_clean['EMA_8'], df_clean['Dist_8']), ("Close vs 21-EMA", df_clean['EMA_21'], df_clean['Dist_21']), ("Close vs 50-SMA", df_clean['SMA_50'], df_clean['Dist_50']), ("Close vs 100-SMA", df_clean['SMA_100'], df_clean['Dist_100']), ("Close vs 200-SMA", df_clean['SMA_200'], df_clean['Dist_200'])]
-    
-    for label, ma_series, dist_series in metrics:
-        # Calculate the extreme buy, median, and extreme sell zones at once
-        p_vals = np.percentile(dist_series, [10, 50, 90])
-        thresholds[dist_series.name] = { 'p10': p_vals[0], 'p50': p_vals[1], 'p90': p_vals[2] } 
+    # ==========================================
+    # TAB 1: SINGLE TICKER DEEP DIVE
+    # ==========================================
+    with tab1:
+        col_in1, col_in2, _ = st.columns([1, 1, 2])
+        with col_in1:
+            ticker = st.text_input("Ticker", value=ud.EMA_DIST_DEFAULT_TICKER, key="t1_ticker").upper().strip()
+        with col_in2:
+            years_back_1 = st.number_input("Years to Analyze", min_value=1, max_value=20, value=ud.EMA_DIST_DEFAULT_YEARS, step=1, key="t1_years")
         
-        gap = dist_series.iloc[-1]
-        signal = "⚪ Neutral"
-        
-        # Traffic Light Logic
-        if gap <= p_vals[0]: signal = "🟢 Extreme Buy"
-        elif gap >= p_vals[2]: signal = "🔴 Extreme Sell"
-        elif gap <= p_vals[1] and current_price > current_ema8: signal = "↗️ Pullback (Bull)"
+        if ticker:
+            with st.spinner(f"Crunching data for {ticker}..."):
+                df_clean = ud.calculate_ema_distance_data(ticker, years_back_1)
+                
+            if df_clean is not None and not df_clean.empty:
+                close_col = 'CLOSE' if 'CLOSE' in df_clean.columns else 'Close'
+                low_col = 'LOW' if 'LOW' in df_clean.columns else 'Low'
+                high_col = 'HIGH' if 'HIGH' in df_clean.columns else 'High'
+                date_col = next((c for c in df_clean.columns if 'DATE' in c), "DATE")
+                
+                current_price = df_clean[close_col].iloc[-1]
+                current_ema8 = df_clean['EMA_8'].iloc[-1]
+                current_dist_50 = df_clean['Dist_50'].iloc[-1]
 
-        stats_data.append({
-            "Metric": label, "Price": current_price, "MA Level": ma_series.iloc[-1], 
-            "Gap": gap, "p10 (Buy)": p_vals[0], "p50 (Med)": p_vals[1], "p90 (Sell)": p_vals[2],
-            "Signal": signal
-        })
+                st.subheader(f"{ticker} vs Moving Avgs & Percentiles")
+                
+                stats_data = []
+                thresholds = {} 
+                metrics = [("Close vs 8-EMA", df_clean['EMA_8'], df_clean['Dist_8']), ("Close vs 21-EMA", df_clean['EMA_21'], df_clean['Dist_21']), ("Close vs 50-SMA", df_clean['SMA_50'], df_clean['Dist_50']), ("Close vs 100-SMA", df_clean['SMA_100'], df_clean['Dist_100']), ("Close vs 200-SMA", df_clean['SMA_200'], df_clean['Dist_200'])]
+                
+                for label, ma_series, dist_series in metrics:
+                    p_vals = np.percentile(dist_series, [10, 50, 90])
+                    thresholds[dist_series.name] = { 'p10': p_vals[0], 'p50': p_vals[1], 'p90': p_vals[2] } 
+                    gap = dist_series.iloc[-1]
+                    signal = "⚪ Neutral"
+                    
+                    if gap <= p_vals[0]: signal = "🟢 Extreme Buy"
+                    elif gap >= p_vals[2]: signal = "🔴 Extreme Sell"
+                    elif gap <= p_vals[1] and current_price > current_ema8: signal = "↗️ Pullback (Bull)"
 
-    df_stats = pd.DataFrame(stats_data)
-    
-    def color_combined(row):
-        styles = [''] * len(row)
-        sig = row['Signal']
-        idx_gap = df_stats.columns.get_loc("Gap")
-        idx_sig = df_stats.columns.get_loc("Signal")
-        
-        if "Extreme Buy" in sig: 
-            styles[idx_gap] = 'background-color: #e6f4ea; color: #1e7e34; font-weight: bold;'
-            styles[idx_sig] = 'background-color: #e6f4ea; color: #1e7e34; font-weight: bold;'
-        elif "Extreme Sell" in sig: 
-            styles[idx_gap] = 'background-color: #fce8e6; color: #c5221f; font-weight: bold;'
-            styles[idx_sig] = 'background-color: #fce8e6; color: #c5221f; font-weight: bold;'
-        elif "Pullback" in sig:
-            styles[idx_gap] = 'color: #1e7e34;'
+                    stats_data.append({
+                        "Metric": label, "Price": current_price, "MA Level": ma_series.iloc[-1], 
+                        "Gap": gap, "p10 (Buy)": p_vals[0], "p50 (Med)": p_vals[1], "p90 (Sell)": p_vals[2],
+                        "Signal": signal
+                    })
+
+                df_stats = pd.DataFrame(stats_data)
+                
+                def color_combined(row):
+                    styles = [''] * len(row)
+                    sig = row['Signal']
+                    idx_gap = df_stats.columns.get_loc("Gap")
+                    idx_sig = df_stats.columns.get_loc("Signal")
+                    if "Extreme Buy" in sig: 
+                        styles[idx_gap] = 'background-color: #e6f4ea; color: #1e7e34; font-weight: bold;'
+                        styles[idx_sig] = 'background-color: #e6f4ea; color: #1e7e34; font-weight: bold;'
+                    elif "Extreme Sell" in sig: 
+                        styles[idx_gap] = 'background-color: #fce8e6; color: #c5221f; font-weight: bold;'
+                        styles[idx_sig] = 'background-color: #fce8e6; color: #c5221f; font-weight: bold;'
+                    elif "Pullback" in sig:
+                        styles[idx_gap] = 'color: #1e7e34;'
+                    return styles
+
+                st.dataframe(df_stats.style.apply(color_combined, axis=1).format(ud.fmt_pct_display, subset=["Gap", "p10 (Buy)", "p50 (Med)", "p90 (Sell)"]), use_container_width=True, hide_index=True, column_config={"Price": st.column_config.NumberColumn("Price", format="$%.2f"), "MA Level": st.column_config.NumberColumn("MA Level", format="$%.2f")})
+                
+                st.subheader("Combo Over-Extension Signals")
+                
+                # --- BUY SETUPS (Oversold) ---
+                t8_10 = thresholds['Dist_8']['p10']; t21_10 = thresholds['Dist_21']['p10']; t50_10 = thresholds['Dist_50']['p10']
+                m_d_buy = (df_clean['Dist_8'] <= t8_10) & (df_clean['Dist_21'] <= t21_10)
+                m_fs_buy = (df_clean['Dist_8'] <= t8_10) & (df_clean['Dist_50'] <= t50_10)
+                m_t_buy = (df_clean['Dist_8'] <= t8_10) & (df_clean['Dist_21'] <= t21_10) & (df_clean['Dist_50'] <= t50_10)
+                
+                res_d_b = ud.run_ema_backtest(m_d_buy, df_clean[close_col], df_clean[high_col], target_pct=abs(ud.EMA_DIST_BACKTEST_DD))
+                res_fs_b = ud.run_ema_backtest(m_fs_buy, df_clean[close_col], df_clean[high_col], target_pct=abs(ud.EMA_DIST_BACKTEST_DD))
+                res_t_b = ud.run_ema_backtest(m_t_buy, df_clean[close_col], df_clean[high_col], target_pct=abs(ud.EMA_DIST_BACKTEST_DD))
+
+                # --- SELL SETUPS (Overbought) ---
+                t8_90 = thresholds['Dist_8']['p90']; t21_90 = thresholds['Dist_21']['p90']; t50_90 = thresholds['Dist_50']['p90']
+                m_d_sell = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_21'] >= t21_90)
+                m_fs_sell = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_50'] >= t50_90)
+                m_t_sell = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_21'] >= t21_90) & (df_clean['Dist_50'] >= t50_90)
+
+                res_d_s = ud.run_ema_backtest(m_d_sell, df_clean[close_col], df_clean[low_col], target_pct=-abs(ud.EMA_DIST_BACKTEST_DD))
+                res_fs_s = ud.run_ema_backtest(m_fs_sell, df_clean[close_col], df_clean[low_col], target_pct=-abs(ud.EMA_DIST_BACKTEST_DD))
+                res_t_s = ud.run_ema_backtest(m_t_sell, df_clean[close_col], df_clean[low_col], target_pct=-abs(ud.EMA_DIST_BACKTEST_DD))
+
+                combo_rows = [
+                    {"Type": "🟢 BUY", "Combo Rule": "Double EMA", "Triggers": "(8-EMA ≤ p10), (21-EMA ≤ p10)", "Occurrences": res_d_b[0], "Hit Rate": res_d_b[1], "Median Days": f"{int(res_d_b[2])}d", "Active?": "✅" if bool(m_d_buy.iloc[-1]) else "❌", "raw": bool(m_d_buy.iloc[-1]), "is_buy": True},
+                    {"Type": "🟢 BUY", "Combo Rule": "Fast vs Swing", "Triggers": "(8-EMA ≤ p10), (50-SMA ≤ p10)", "Occurrences": res_fs_b[0], "Hit Rate": res_fs_b[1], "Median Days": f"{int(res_fs_b[2])}d", "Active?": "✅" if bool(m_fs_buy.iloc[-1]) else "❌", "raw": bool(m_fs_buy.iloc[-1]), "is_buy": True},
+                    {"Type": "🟢 BUY", "Combo Rule": "Triple Stack", "Triggers": "(8-EMA ≤ p10), (50-SMA ≤ p10), (21-EMA ≤ p10)", "Occurrences": res_t_b[0], "Hit Rate": res_t_b[1], "Median Days": f"{int(res_t_b[2])}d", "Active?": "✅" if bool(m_t_buy.iloc[-1]) else "❌", "raw": bool(m_t_buy.iloc[-1]), "is_buy": True},
+                    {"Type": "🔴 SELL", "Combo Rule": "Double EMA", "Triggers": "(8-EMA ≥ p90), (21-EMA ≥ p90)", "Occurrences": res_d_s[0], "Hit Rate": res_d_s[1], "Median Days": f"{int(res_d_s[2])}d", "Active?": "✅" if bool(m_d_sell.iloc[-1]) else "❌", "raw": bool(m_d_sell.iloc[-1]), "is_buy": False},
+                    {"Type": "🔴 SELL", "Combo Rule": "Fast vs Swing", "Triggers": "(8-EMA ≥ p90), (50-SMA ≥ p90)", "Occurrences": res_fs_s[0], "Hit Rate": res_fs_s[1], "Median Days": f"{int(res_fs_s[2])}d", "Active?": "✅" if bool(m_fs_sell.iloc[-1]) else "❌", "raw": bool(m_fs_sell.iloc[-1]), "is_buy": False},
+                    {"Type": "🔴 SELL", "Combo Rule": "Triple Stack", "Triggers": "(8-EMA ≥ p90), (50-SMA ≥ p90), (21-EMA ≥ p90)", "Occurrences": res_t_s[0], "Hit Rate": res_t_s[1], "Median Days": f"{int(res_t_s[2])}d", "Active?": "✅" if bool(m_t_sell.iloc[-1]) else "❌", "raw": bool(m_t_sell.iloc[-1]), "is_buy": False}
+                ]
+                
+                df_combo = pd.DataFrame(combo_rows)
+                def style_combo(row): 
+                    if row['raw']:
+                        return ['font-weight: bold; background-color: #e6f4ea; color: #1e7e34;' if row['is_buy'] else 'font-weight: bold; background-color: #fce8e6; color: #c5221f;'] * len(row)
+                    return [''] * len(row)
+                    
+                st.dataframe(df_combo.style.apply(style_combo, axis=1).format({"Hit Rate": "{:.1f}%"}), use_container_width=True, hide_index=True, column_config={"Triggers": st.column_config.TextColumn("Trigger Conditions", width="large"), "Active?": st.column_config.TextColumn("Active?", width="small"), "raw": None, "is_buy": None})
+
+                st.subheader("Visualizing the % Distance from 50 SMA")
+                chart_data = pd.DataFrame({'Date': pd.to_datetime(df_clean[date_col]), 'Distance (%)': df_clean['Dist_50']})
+                chart_data = chart_data[chart_data['Date'] >= (chart_data['Date'].max() - timedelta(days=ud.EMA_DIST_CHART_LOOKBACK))]
+
+                bars = alt.Chart(chart_data).mark_bar().encode(x=alt.X('Date:T', title=None), y=alt.Y('Distance (%)', title='% Dist from 50 SMA'), color=alt.condition(alt.datum['Distance (%)'] > 0, alt.value("#71d28a"), alt.value("#f29ca0")), tooltip=['Date', 'Distance (%)'])
+                rule = alt.Chart(pd.DataFrame({'y': [current_dist_50]})).mark_rule(color='#333', strokeDash=[5, 5], strokeWidth=2).encode(y='y:Q')
+                st.altair_chart((bars + rule).properties(height=300).interactive(), use_container_width=True)
+
+    # ==========================================
+    # TAB 2: BULK SCANNER
+    # ==========================================
+    with tab2:
+        col_in3, col_in4, _ = st.columns([2, 1, 1])
+        with col_in3:
+            tickers_input = st.text_area("Tickers (comma separated)", value="AAPL, TSLA, NVDA, MSFT", height=100, key="t2_tickers").upper().strip()
+        with col_in4:
+            years_back_2 = st.number_input("Years to Analyze", min_value=1, max_value=20, value=ud.EMA_DIST_DEFAULT_YEARS, step=1, key="t2_years")
             
-        return styles
+        st.markdown("### Filter Results")
+        # Added a radio button to easily toggle what you want to see
+        filter_choice = st.radio("Show:", ["All Tickers", "🟢 Buy Signals Only (Any)", "🔴 Sell Signals Only (Any)", "🔥 Triple Stack Only"], horizontal=True)
 
-    st.dataframe(df_stats.style.apply(color_combined, axis=1).format(ud.fmt_pct_display, subset=["Gap", "p10 (Buy)", "p50 (Med)", "p90 (Sell)"]), use_container_width=True, hide_index=True, column_config={"Price": st.column_config.NumberColumn("Price", format="$%.2f"), "MA Level": st.column_config.NumberColumn("MA Level", format="$%.2f")})
-    
-    st.subheader("Combo Over-Extension Signals")
-    
-    # --- BUY SETUPS (Oversold) ---
-    t8_10 = thresholds['Dist_8']['p10']; t21_10 = thresholds['Dist_21']['p10']; t50_10 = thresholds['Dist_50']['p10']
-    m_d_buy = (df_clean['Dist_8'] <= t8_10) & (df_clean['Dist_21'] <= t21_10)
-    m_fs_buy = (df_clean['Dist_8'] <= t8_10) & (df_clean['Dist_50'] <= t50_10)
-    m_t_buy = (df_clean['Dist_8'] <= t8_10) & (df_clean['Dist_21'] <= t21_10) & (df_clean['Dist_50'] <= t50_10)
-    
-    res_d_b = ud.run_ema_backtest(m_d_buy, df_clean[close_col], df_clean[high_col], target_pct=abs(ud.EMA_DIST_BACKTEST_DD))
-    res_fs_b = ud.run_ema_backtest(m_fs_buy, df_clean[close_col], df_clean[high_col], target_pct=abs(ud.EMA_DIST_BACKTEST_DD))
-    res_t_b = ud.run_ema_backtest(m_t_buy, df_clean[close_col], df_clean[high_col], target_pct=abs(ud.EMA_DIST_BACKTEST_DD))
+        if st.button("Run Bulk Scan", type="primary"):
+            ticker_list = [t.strip() for t in tickers_input.split(",") if t.strip()]
+            if not ticker_list:
+                st.warning("Please enter at least one ticker.")
+            else:
+                scan_data = []
+                progress_bar = st.progress(0, text="Scanning tickers...")
+                
+                for i, tick in enumerate(ticker_list):
+                    progress_bar.progress((i + 1) / len(ticker_list), text=f"Analyzing {tick}...")
+                    df_clean = ud.calculate_ema_distance_data(tick, years_back_2)
+                    
+                    if df_clean is not None and not df_clean.empty:
+                        close_col = 'CLOSE' if 'CLOSE' in df_clean.columns else 'Close'
+                        current_price = df_clean[close_col].iloc[-1]
+                        
+                        def get_signal_data(dist_series):
+                            p10, p50, p90 = np.percentile(dist_series, [10, 50, 90])
+                            gap = dist_series.iloc[-1]
+                            if gap <= p10: return "🟢 Buy", gap, -1
+                            if gap >= p90: return "🔴 Sell", gap, 1
+                            return "⚪ Neutral", gap, 0
 
-    # --- SELL SETUPS (Overbought) ---
-    t8_90 = thresholds['Dist_8']['p90']; t21_90 = thresholds['Dist_21']['p90']; t50_90 = thresholds['Dist_50']['p90']
-    m_d_sell = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_21'] >= t21_90)
-    m_fs_sell = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_50'] >= t50_90)
-    m_t_sell = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_21'] >= t21_90) & (df_clean['Dist_50'] >= t50_90)
+                        sig_8, gap_8, val_8 = get_signal_data(df_clean['Dist_8'])
+                        sig_21, gap_21, val_21 = get_signal_data(df_clean['Dist_21'])
+                        sig_50, gap_50, val_50 = get_signal_data(df_clean['Dist_50'])
+                        
+                        # Determine overall status for filtering
+                        is_triple_buy = (val_8 == -1 and val_21 == -1 and val_50 == -1)
+                        is_triple_sell = (val_8 == 1 and val_21 == 1 and val_50 == 1)
+                        has_buy = (val_8 == -1 or val_21 == -1 or val_50 == -1)
+                        has_sell = (val_8 == 1 or val_21 == 1 or val_50 == 1)
+                        
+                        # Apply the selected filter
+                        keep = True
+                        if filter_choice == "🟢 Buy Signals Only (Any)" and not has_buy: keep = False
+                        if filter_choice == "🔴 Sell Signals Only (Any)" and not has_sell: keep = False
+                        if filter_choice == "🔥 Triple Stack Only" and not (is_triple_buy or is_triple_sell): keep = False
+                        
+                        if keep:
+                            scan_data.append({
+                                "Ticker": tick,
+                                "Price": current_price,
+                                "8-EMA": sig_8,
+                                "Gap 8": gap_8,
+                                "21-EMA": sig_21,
+                                "Gap 21": gap_21,
+                                "50-SMA": sig_50,
+                                "Gap 50": gap_50
+                            })
+                        
+                progress_bar.empty() # Clear the loading bar when done
+                
+                if scan_data:
+                    df_scan = pd.DataFrame(scan_data)
+                    
+                    def style_scanner(row):
+                        styles = [''] * len(row)
+                        for col in ['8-EMA', '21-EMA', '50-SMA']:
+                            if col in df_scan.columns:
+                                idx = df_scan.columns.get_loc(col)
+                                if "Buy" in row[col]: styles[idx] = 'background-color: #e6f4ea; color: #1e7e34; font-weight: bold;'
+                                elif "Sell" in row[col]: styles[idx] = 'background-color: #fce8e6; color: #c5221f; font-weight: bold;'
+                        return styles
+                        
+                    st.dataframe(df_scan.style.apply(style_scanner, axis=1).format(ud.fmt_pct_display, subset=["Gap 8", "Gap 21", "Gap 50"]), use_container_width=True, hide_index=True)
+                else:
+                    st.info(f"No tickers matched the criteria for: {filter_choice}")
 
-    res_d_s = ud.run_ema_backtest(m_d_sell, df_clean[close_col], df_clean[low_col], target_pct=-abs(ud.EMA_DIST_BACKTEST_DD))
-    res_fs_s = ud.run_ema_backtest(m_fs_sell, df_clean[close_col], df_clean[low_col], target_pct=-abs(ud.EMA_DIST_BACKTEST_DD))
-    res_t_s = ud.run_ema_backtest(m_t_sell, df_clean[close_col], df_clean[low_col], target_pct=-abs(ud.EMA_DIST_BACKTEST_DD))
-
-    combo_rows = [
-        {"Type": "🟢 BUY", "Combo Rule": "Double EMA", "Triggers": "(8-EMA ≤ p10), (21-EMA ≤ p10)", "Occurrences": res_d_b[0], "Hit Rate": res_d_b[1], "Median Days": f"{int(res_d_b[2])}d", "Active?": "✅" if bool(m_d_buy.iloc[-1]) else "❌", "raw": bool(m_d_buy.iloc[-1]), "is_buy": True},
-        {"Type": "🟢 BUY", "Combo Rule": "Fast vs Swing", "Triggers": "(8-EMA ≤ p10), (50-SMA ≤ p10)", "Occurrences": res_fs_b[0], "Hit Rate": res_fs_b[1], "Median Days": f"{int(res_fs_b[2])}d", "Active?": "✅" if bool(m_fs_buy.iloc[-1]) else "❌", "raw": bool(m_fs_buy.iloc[-1]), "is_buy": True},
-        {"Type": "🟢 BUY", "Combo Rule": "Triple Stack", "Triggers": "(8-EMA ≤ p10), (50-SMA ≤ p10), (21-EMA ≤ p10)", "Occurrences": res_t_b[0], "Hit Rate": res_t_b[1], "Median Days": f"{int(res_t_b[2])}d", "Active?": "✅" if bool(m_t_buy.iloc[-1]) else "❌", "raw": bool(m_t_buy.iloc[-1]), "is_buy": True},
-        {"Type": "🔴 SELL", "Combo Rule": "Double EMA", "Triggers": "(8-EMA ≥ p90), (21-EMA ≥ p90)", "Occurrences": res_d_s[0], "Hit Rate": res_d_s[1], "Median Days": f"{int(res_d_s[2])}d", "Active?": "✅" if bool(m_d_sell.iloc[-1]) else "❌", "raw": bool(m_d_sell.iloc[-1]), "is_buy": False},
-        {"Type": "🔴 SELL", "Combo Rule": "Fast vs Swing", "Triggers": "(8-EMA ≥ p90), (50-SMA ≥ p90)", "Occurrences": res_fs_s[0], "Hit Rate": res_fs_s[1], "Median Days": f"{int(res_fs_s[2])}d", "Active?": "✅" if bool(m_fs_sell.iloc[-1]) else "❌", "raw": bool(m_fs_sell.iloc[-1]), "is_buy": False},
-        {"Type": "🔴 SELL", "Combo Rule": "Triple Stack", "Triggers": "(8-EMA ≥ p90), (50-SMA ≥ p90), (21-EMA ≥ p90)", "Occurrences": res_t_s[0], "Hit Rate": res_t_s[1], "Median Days": f"{int(res_t_s[2])}d", "Active?": "✅" if bool(m_t_sell.iloc[-1]) else "❌", "raw": bool(m_t_sell.iloc[-1]), "is_buy": False}
-    ]
-    
-    df_combo = pd.DataFrame(combo_rows)
-    def style_combo(row): 
-        if row['raw']:
-            return ['font-weight: bold; background-color: #e6f4ea; color: #1e7e34;' if row['is_buy'] else 'font-weight: bold; background-color: #fce8e6; color: #c5221f;'] * len(row)
-        return [''] * len(row)
-        
-    st.dataframe(df_combo.style.apply(style_combo, axis=1).format({"Hit Rate": "{:.1f}%"}), use_container_width=True, hide_index=True, column_config={"Triggers": st.column_config.TextColumn("Trigger Conditions", width="large"), "Active?": st.column_config.TextColumn("Active?", width="small"), "raw": None, "is_buy": None})
-
-    st.subheader("Visualizing the % Distance from 50 SMA")
-    chart_data = pd.DataFrame({'Date': pd.to_datetime(df_clean[date_col]), 'Distance (%)': df_clean['Dist_50']})
-    chart_data = chart_data[chart_data['Date'] >= (chart_data['Date'].max() - timedelta(days=ud.EMA_DIST_CHART_LOOKBACK))]
-
-    bars = alt.Chart(chart_data).mark_bar().encode(x=alt.X('Date:T', title=None), y=alt.Y('Distance (%)', title='% Dist from 50 SMA'), color=alt.condition(alt.datum['Distance (%)'] > 0, alt.value("#71d28a"), alt.value("#f29ca0")), tooltip=['Date', 'Distance (%)'])
-    rule = alt.Chart(pd.DataFrame({'y': [current_dist_50]})).mark_rule(color='#333', strokeDash=[5, 5], strokeWidth=2).encode(y='y:Q')
-    st.altair_chart((bars + rule).properties(height=300).interactive(), use_container_width=True)
