@@ -801,89 +801,86 @@ def run_rsi_scanner_app(df_global):
 
 import traceback
 
-def run_seasonality_app(ticker_map, scan_date, scan_lookback, mc_thresh_val):
-    all_tickers = [k for k in ticker_map.keys() if not k.upper().endswith('_PARQUET')]
-    valid_tickers = []
-    def check_mc(t):
-        if get_market_cap(t) < mc_thresh_val: return None
-        return t
-    with ThreadPoolExecutor(max_workers=20) as executor:
-        futures = {executor.submit(check_mc, t): t for t in all_tickers}
-        for future in as_completed(futures):
-            res = future.result()
-            if res: valid_tickers.append(res)
+def run_seasonality_app(df_global):
+    st.title("📅 Seasonality")
     
-    results = []; all_csv_rows = {k: [] for k in SEAS_SCAN_PERIODS.keys()}
-    def calc_forward_returns(ticker_sym):
-        try:
-            d_df = fetch_history_optimized(ticker_sym, ticker_map)
-            if d_df is None or d_df.empty: return None, None
-            d_df.columns = [c.strip().upper() for c in d_df.columns]
-            date_c = next((c for c in d_df.columns if 'DATE' in c), None)
-            close_c = next((c for c in d_df.columns if 'CLOSE' in c), None)
-            if not date_c or not close_c: return None, None
-            d_df[date_c] = pd.to_datetime(d_df[date_c])
-            d_df = d_df.sort_values(date_c).reset_index(drop=True)
-            cutoff = pd.to_datetime(date.today()) - timedelta(days=scan_lookback*365)
-            d_df_hist = d_df[d_df[date_c] >= cutoff].copy().reset_index(drop=True)
-            if len(d_df_hist) < 252: return None, None
+    tab_heatmap, tab_scan = st.tabs(["🔥 Individual Heatmap", "📡 Market Scan"])
+    
+    # ==========================================
+    # TAB 1: INDIVIDUAL TICKER HEATMAP
+    # ==========================================
+    with tab_heatmap:
+        st.markdown("### Historical Monthly Performance")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            ticker = st.text_input("Ticker Symbol", value="SPY", key="seas_ticker").strip().upper()
+        with c2:
+            start_year = st.number_input("Start Year", min_value=1950, max_value=date.today().year, value=date.today().year - ud.SEAS_DEFAULT_LOOKBACK_YEARS, key="seas_start_year")
+        with c3:
+            end_year = st.number_input("End Year", min_value=1950, max_value=date.today().year, value=date.today().year, key="seas_end_year")
             
-            recent_perf = 0.0
-            if len(d_df) > 21:
-                last_p = d_df[close_c].iloc[-1]; prev_p = d_df[close_c].iloc[-22] 
-                recent_perf = ((last_p - prev_p) / prev_p) * 100
-            
-            target_doy = scan_date.timetuple().tm_yday
-            d_df_hist['DOY'] = d_df_hist[date_c].dt.dayofyear
-            matches = d_df_hist[(d_df_hist['DOY'] >= target_doy - SEAS_SCAN_WINDOW_DAYS) & 
-                                (d_df_hist['DOY'] <= target_doy + SEAS_SCAN_WINDOW_DAYS)].copy()
-            matches['Year'] = matches[date_c].dt.year
-            matches = matches.drop_duplicates(subset=['Year'])
-            curr_y = date.today().year
-            matches = matches[matches['Year'] < curr_y]
-            if len(matches) < SEAS_SCAN_MIN_SAMPLES: return None, None
-            
-            stats_row = {'Ticker': ticker_sym, 'N': len(matches), 'Recent_21d': recent_perf}
-            hist_lag_returns = []
-            for idx in matches.index:
-                if idx >= 21:
-                    p_now = d_df_hist.loc[idx, close_c]; p_prev = d_df_hist.loc[idx - 21, close_c]
-                    hist_lag_returns.append((p_now - p_prev) / p_prev)
-            stats_row['Hist_Lag_21d'] = (np.mean(hist_lag_returns) * 100) if hist_lag_returns else 0.0
-            
-            ticker_csv_rows = {k: [] for k in SEAS_SCAN_PERIODS.keys()}
-            for p_name, trading_days in SEAS_SCAN_PERIODS.items():
-                returns = []
-                for idx in matches.index:
-                    entry_p = d_df_hist.loc[idx, close_c]
-                    exit_idx = idx + trading_days
-                    if exit_idx < len(d_df_hist):
-                        exit_p = d_df_hist.loc[exit_idx, close_c]
-                        ret = (exit_p - entry_p) / entry_p
-                        returns.append(ret)
-                        ticker_csv_rows[p_name].append({
-                            "Ticker": ticker_sym, "Start Date": d_df_hist.loc[idx, date_c].date(),
-                            "Entry Price": entry_p, "Exit Date": d_df_hist.loc[exit_idx, date_c].date(),
-                            "Exit Price": exit_p, "Return (%)": ret * 100
-                        })
-                if returns:
-                    returns_arr = np.array(returns)
-                    avg_ret = np.mean(returns_arr) * 100; win_r = np.mean(returns_arr > 0) * 100
-                    std_dev = np.std(returns_arr) * 100; sharpe = avg_ret / std_dev if std_dev > 0.1 else 0.0
-                else: avg_ret = 0.0; win_r = 0.0; sharpe = 0.0
-                stats_row[f"{p_name}_EV"] = avg_ret; stats_row[f"{p_name}_WR"] = win_r; stats_row[f"{p_name}_Sharpe"] = sharpe
-            return stats_row, ticker_csv_rows
-        except Exception: return None, None
+        if ticker:
+            with st.spinner(f"Loading data for {ticker}..."):
+                ticker_map = ud.load_ticker_map()
+                df_history = ud.fetch_history_optimized(ticker, ticker_map)
+                
+                if df_history is None or df_history.empty:
+                    st.error(f"Could not load historical data for {ticker}.")
+                else:
+                    stats = ud.calculate_seasonality_stats(df_history, start_year, end_year)
+                    if stats:
+                        heatmap_df = ud.prepare_seasonality_heatmap(stats["hist_df"], stats["curr_df"])
+                        
+                        def style_heatmap(val):
+                            if pd.isna(val): return ''
+                            if isinstance(val, str): return ''
+                            if val > 0: return 'background-color: rgba(113, 210, 138, 0.4); color: #1e7e34;'
+                            elif val < 0: return 'background-color: rgba(242, 156, 160, 0.4); color: #c5221f;'
+                            return ''
+                            
+                        st.dataframe(
+                            heatmap_df.style.format(ud.fmt_finance_str).map(style_heatmap),
+                            use_container_width=True,
+                            height=ud.SEAS_TABLE_HEIGHT
+                        )
+                    else:
+                        st.warning("Not enough data to calculate seasonality for the selected date range.")
 
-    with ThreadPoolExecutor(max_workers=20) as executor: 
-        futures = {executor.submit(calc_forward_returns, t): t for t in valid_tickers}
-        for future in as_completed(futures):
-            res_stats, res_details = future.result()
-            if res_stats: results.append(res_stats)
-            if res_details:
-                for k in all_csv_rows.keys():
-                    if res_details[k]: all_csv_rows[k].extend(res_details[k])
-    return pd.DataFrame(results) if results else pd.DataFrame(), all_csv_rows
+    # ==========================================
+    # TAB 2: MARKET-WIDE SCANNER
+    # ==========================================
+    with tab_scan:
+        st.markdown("### Forward Seasonality Scanner")
+        st.caption("Scans the market for historical periods matching today's Day of Year.")
+        
+        # Define the 3 variables that were previously causing the crash
+        sc1, sc2, sc3 = st.columns(3)
+        with sc1:
+            scan_date = st.date_input("Scan Reference Date", value=date.today(), key="seas_scan_date")
+        with sc2:
+            scan_lookback = st.number_input("Lookback Years", min_value=ud.SEAS_SCAN_MIN_YEARS, max_value=ud.SEAS_SCAN_MAX_YEARS, value=ud.SEAS_SCAN_DEFAULT_YEARS, key="seas_scan_lb")
+        with sc3:
+            mc_opts = list(ud.SEAS_SCAN_MC_OPTIONS.keys())
+            mc_str = st.selectbox("Min Market Cap", mc_opts, index=mc_opts.index("10B") if "10B" in mc_opts else 0, key="seas_scan_mc")
+            mc_thresh_val = ud.SEAS_SCAN_MC_OPTIONS[mc_str]
+            
+        if st.button("🚀 Run Market Scan", type="primary"):
+            with st.spinner("Scanning all available tickers... This may take a moment."):
+                ticker_map = ud.load_ticker_map()
+                results_df, csv_rows = ud.run_seasonality_scan(ticker_map, scan_date, scan_lookback, mc_thresh_val)
+                
+                if not results_df.empty:
+                    st.success(f"Scan complete! Analyzed {len(results_df)} valid setups.")
+                    
+                    # Optional: Apply some basic color mapping to the results table
+                    def style_scan_results(df):
+                        format_dict = {c: "{:+.2f}%" for c in df.columns if 'EV' in c or 'Recent' in c or 'Hist' in c}
+                        format_dict.update({c: "{:.1f}%" for c in df.columns if 'WR' in c})
+                        return df.style.format(format_dict)
+                        
+                    st.dataframe(style_scan_results(results_df), use_container_width=True, hide_index=True, height=500)
+                else:
+                    st.warning("No significant seasonal trends found for this setup.")
 
 def run_ema_distance_app(df_global):
     st.title("📏 EMA Distance Analysis")
