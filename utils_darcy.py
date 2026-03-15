@@ -1420,13 +1420,29 @@ def fetch_history_optimized(ticker_sym, t_map):
                     df.rename(columns={df.columns[0]: 'ChartDate'}, inplace=True)
                 return df
         except Exception: pass 
+        
+    # --- FIX: Standardize fallback data to also use 'ChartDate' ---
+    df = None
     if ticker_sym in t_map:
         try:
             df = get_ticker_technicals(ticker_sym, t_map)
-            if df is not None and not df.empty: return df
         except Exception: pass
-    try: return fetch_yahoo_data(ticker_sym)
-    except Exception: return None
+        
+    if df is None or df.empty:
+        try: 
+            df = fetch_yahoo_data(ticker_sym)
+        except Exception: pass
+        
+    if df is not None and not df.empty:
+        # Rename 'DATE' to 'ChartDate' to prevent dashboard KeyErrors
+        if 'DATE' in df.columns: 
+            df.rename(columns={'DATE': 'ChartDate'}, inplace=True)
+        elif isinstance(df.index, pd.DatetimeIndex):
+            df.reset_index(inplace=True)
+            df.rename(columns={df.columns[0]: 'ChartDate'}, inplace=True)
+        return df
+        
+    return None
 
 def fmt_finance_str(val):
     if pd.isna(val): return ""
