@@ -1008,6 +1008,10 @@ def run_seasonality_app(df_global):
 def run_ema_distance_app(df_global):
     st.title("📏 EMA Distance Analysis")
     
+    # Initialize session state so the bulk scanner remembers data when you change pages
+    if 'ema_bulk_results' not in st.session_state:
+        st.session_state['ema_bulk_results'] = []
+        
     # Create the two tabs
     tab1, tab2 = st.tabs(["Single Ticker Deep Dive", "Bulk Extreme Scanner"])
     
@@ -1078,7 +1082,6 @@ def run_ema_distance_app(df_global):
                 
                 st.subheader("Combo Over-Extension Signals")
                 
-                # --- BUY SETUPS (Oversold) ---
                 t8_10 = thresholds['Dist_8']['p10']; t21_10 = thresholds['Dist_21']['p10']; t50_10 = thresholds['Dist_50']['p10']
                 m_d_buy = (df_clean['Dist_8'] <= t8_10) & (df_clean['Dist_21'] <= t21_10)
                 m_fs_buy = (df_clean['Dist_8'] <= t8_10) & (df_clean['Dist_50'] <= t50_10)
@@ -1088,7 +1091,6 @@ def run_ema_distance_app(df_global):
                 res_fs_b = ud.run_ema_backtest(m_fs_buy, df_clean[close_col], df_clean[high_col], target_pct=abs(ud.EMA_DIST_BACKTEST_DD))
                 res_t_b = ud.run_ema_backtest(m_t_buy, df_clean[close_col], df_clean[high_col], target_pct=abs(ud.EMA_DIST_BACKTEST_DD))
 
-                # --- SELL SETUPS (Overbought) ---
                 t8_90 = thresholds['Dist_8']['p90']; t21_90 = thresholds['Dist_21']['p90']; t50_90 = thresholds['Dist_50']['p90']
                 m_d_sell = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_21'] >= t21_90)
                 m_fs_sell = (df_clean['Dist_8'] >= t8_90) & (df_clean['Dist_50'] >= t50_90)
@@ -1134,8 +1136,17 @@ def run_ema_distance_app(df_global):
             years_back_2 = st.number_input("Years to Analyze", min_value=1, max_value=20, value=ud.EMA_DIST_DEFAULT_YEARS, step=1, key="t2_years")
             
         st.markdown("### Filter Results")
-        # Added a radio button to easily toggle what you want to see
-        filter_choice = st.radio("Show:", ["All Tickers", "🟢 Buy Signals Only (Any)", "🔴 Sell Signals Only (Any)", "🔥 Triple Stack Only"], horizontal=True)
+        # Combos match the user's uploaded image table perfectly
+        filter_choice = st.selectbox("Show:", [
+            "All Tickers (No Filter)",
+            "Any Combo Triggered",
+            "🟢 BUY: Double EMA (8-EMA & 21-EMA ≤ p10)",
+            "🟢 BUY: Fast vs Swing (8-EMA & 50-SMA ≤ p10)",
+            "🟢 BUY: Triple Stack (8, 21, 50 ≤ p10)",
+            "🔴 SELL: Double EMA (8-EMA & 21-EMA ≥ p90)",
+            "🔴 SELL: Fast vs Swing (8-EMA & 50-SMA ≥ p90)",
+            "🔴 SELL: Triple Stack (8, 21, 50 ≥ p90)"
+        ])
 
         if st.button("Run Bulk Scan", type="primary"):
             ticker_list = [t.strip() for t in tickers_input.split(",") if t.strip()]
@@ -1164,45 +1175,92 @@ def run_ema_distance_app(df_global):
                         sig_21, gap_21, val_21 = get_signal_data(df_clean['Dist_21'])
                         sig_50, gap_50, val_50 = get_signal_data(df_clean['Dist_50'])
                         
-                        # Determine overall status for filtering
-                        is_triple_buy = (val_8 == -1 and val_21 == -1 and val_50 == -1)
-                        is_triple_sell = (val_8 == 1 and val_21 == 1 and val_50 == 1)
-                        has_buy = (val_8 == -1 or val_21 == -1 or val_50 == -1)
-                        has_sell = (val_8 == 1 or val_21 == 1 or val_50 == 1)
+                        scan_data.append({
+                            "Ticker": tick,
+                            "Price": current_price,
+                            "8-EMA": sig_8,
+                            "Gap 8": gap_8,
+                            "val_8": val_8,
+                            "21-EMA": sig_21,
+                            "Gap 21": gap_21,
+                            "val_21": val_21,
+                            "50-SMA": sig_50,
+                            "Gap 50": gap_50,
+                            "val_50": val_50
+                        })
                         
-                        # Apply the selected filter
-                        keep = True
-                        if filter_choice == "🟢 Buy Signals Only (Any)" and not has_buy: keep = False
-                        if filter_choice == "🔴 Sell Signals Only (Any)" and not has_sell: keep = False
-                        if filter_choice == "🔥 Triple Stack Only" and not (is_triple_buy or is_triple_sell): keep = False
-                        
-                        if keep:
-                            scan_data.append({
-                                "Ticker": tick,
-                                "Price": current_price,
-                                "8-EMA": sig_8,
-                                "Gap 8": gap_8,
-                                "21-EMA": sig_21,
-                                "Gap 21": gap_21,
-                                "50-SMA": sig_50,
-                                "Gap 50": gap_50
-                            })
-                        
-                progress_bar.empty() # Clear the loading bar when done
+                progress_bar.empty()
+                # Store the raw results in session state so they persist across page reloads
+                st.session_state['ema_bulk_results'] = scan_data
                 
-                if scan_data:
-                    df_scan = pd.DataFrame(scan_data)
+        # --- Display the Persistent Data ---
+        if st.session_state['ema_bulk_results']:
+            filtered_data = []
+            
+            for row in st.session_state['ema_bulk_results']:
+                v8, v21, v50 = row['val_8'], row['val_21'], row['val_50']
+                
+                # Evaluate combos based on logic
+                d_buy = (v8 == -1 and v21 == -1)
+                fs_buy = (v8 == -1 and v50 == -1)
+                t_buy = (v8 == -1 and v21 == -1 and v50 == -1)
+                
+                d_sell = (v8 == 1 and v21 == 1)
+                fs_sell = (v8 == 1 and v50 == 1)
+                t_sell = (v8 == 1 and v21 == 1 and v50 == 1)
+                
+                any_combo = any([d_buy, fs_buy, t_buy, d_sell, fs_sell, t_sell])
+                
+                # Apply the filter chosen by the user
+                keep = False
+                if "All Tickers" in filter_choice: keep = True
+                elif "Any Combo Triggered" in filter_choice and any_combo: keep = True
+                elif "Double EMA (8-EMA & 21-EMA ≤ p10)" in filter_choice and d_buy: keep = True
+                elif "Fast vs Swing (8-EMA & 50-SMA ≤ p10)" in filter_choice and fs_buy: keep = True
+                elif "Triple Stack (8, 21, 50 ≤ p10)" in filter_choice and t_buy: keep = True
+                elif "Double EMA (8-EMA & 21-EMA ≥ p90)" in filter_choice and d_sell: keep = True
+                elif "Fast vs Swing (8-EMA & 50-SMA ≥ p90)" in filter_choice and fs_sell: keep = True
+                elif "Triple Stack (8, 21, 50 ≥ p90)" in filter_choice and t_sell: keep = True
+                
+                if keep:
+                    # Strip out the hidden tracking values to clean up the table
+                    display_row = {k: v for k, v in row.items() if not k.startswith('val_')}
                     
-                    def style_scanner(row):
-                        styles = [''] * len(row)
-                        for col in ['8-EMA', '21-EMA', '50-SMA']:
-                            if col in df_scan.columns:
-                                idx = df_scan.columns.get_loc(col)
-                                if "Buy" in row[col]: styles[idx] = 'background-color: #e6f4ea; color: #1e7e34; font-weight: bold;'
-                                elif "Sell" in row[col]: styles[idx] = 'background-color: #fce8e6; color: #c5221f; font-weight: bold;'
-                        return styles
-                        
-                    st.dataframe(df_scan.style.apply(style_scanner, axis=1).format(ud.fmt_pct_display, subset=["Gap 8", "Gap 21", "Gap 50"]), use_container_width=True, hide_index=True)
-                else:
-                    st.info(f"No tickers matched the criteria for: {filter_choice}")
-
+                    # Generate a clean label for what combos are active on this row
+                    combos = []
+                    if t_buy: combos.append("🟢 Triple Stack")
+                    elif fs_buy and d_buy: combos.append("🟢 Fast/Swing, 🟢 Dbl EMA")
+                    elif fs_buy: combos.append("🟢 Fast/Swing")
+                    elif d_buy: combos.append("🟢 Dbl EMA")
+                    
+                    if t_sell: combos.append("🔴 Triple Stack")
+                    elif fs_sell and d_sell: combos.append("🔴 Fast/Swing, 🔴 Dbl EMA")
+                    elif fs_sell: combos.append("🔴 Fast/Swing")
+                    elif d_sell: combos.append("🔴 Dbl EMA")
+                    
+                    display_row['Active Combos'] = " | ".join(combos) if combos else "None"
+                    filtered_data.append(display_row)
+                    
+            if filtered_data:
+                df_scan = pd.DataFrame(filtered_data)
+                
+                def style_scanner(row):
+                    styles = [''] * len(row)
+                    for col in ['8-EMA', '21-EMA', '50-SMA']:
+                        if col in df_scan.columns:
+                            idx = df_scan.columns.get_loc(col)
+                            if "Buy" in row[col]: styles[idx] = 'background-color: #e6f4ea; color: #1e7e34; font-weight: bold;'
+                            elif "Sell" in row[col]: styles[idx] = 'background-color: #fce8e6; color: #c5221f; font-weight: bold;'
+                    return styles
+                
+                # We specifically enforce the $0.00 price format using column_config here
+                st.dataframe(
+                    df_scan.style.apply(style_scanner, axis=1).format(ud.fmt_pct_display, subset=["Gap 8", "Gap 21", "Gap 50"]), 
+                    use_container_width=True, 
+                    hide_index=True,
+                    column_config={
+                        "Price": st.column_config.NumberColumn("Price", format="$%.2f")
+                    }
+                )
+            else:
+                st.info(f"No tickers matched the criteria for: {filter_choice}")
