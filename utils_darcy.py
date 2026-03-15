@@ -131,14 +131,24 @@ def load_ticker_map():
     """Apps: Seasonality, RSI Scanner, Rankings"""
     try:
         url = st.secrets.get("URL_TICKER_MAP")
-        if not url: return {}
+        if not url: 
+            return {} # Secret is genuinely missing
+            
         buffer = get_gdrive_binary_data(url)
-        if buffer:
-            df = pd.read_csv(buffer, engine='c')
-            if len(df.columns) >= 2:
-                return dict(zip(df.iloc[:, 0].astype(str).str.strip().str.upper(), df.iloc[:, 1].astype(str).str.strip()))
-    except Exception: pass
-    return {}
+        if not buffer:
+            st.error(f"⚠️ TICKER_MAP Download Failed. Please verify Google Drive permissions ('Anyone with the link' can view). URL: {url}")
+            return {}
+            
+        df = pd.read_csv(buffer, engine='c')
+        if len(df.columns) >= 2:
+            return dict(zip(df.iloc[:, 0].astype(str).str.strip().str.upper(), df.iloc[:, 1].astype(str).str.strip()))
+        else:
+            st.error("⚠️ TICKER_MAP downloaded, but couldn't read the columns.")
+            return {}
+            
+    except Exception as e: 
+        st.error(f"⚠️ Error parsing TICKER_MAP: {e}")
+        return {}
 
 def add_technicals(df):
     """
