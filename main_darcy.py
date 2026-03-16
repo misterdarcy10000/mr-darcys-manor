@@ -1007,6 +1007,13 @@ def run_seasonality_app(df_global):
 
 def run_ema_distance_app(df_global):
     st.title("📏 EMA Distance Analysis")
+    
+    # Initialize session state so the bulk scanner remembers data when you change pages
+    if 'ema_bulk_results' not in st.session_state:
+        st.session_state['ema_bulk_results'] = []
+        
+    # Create the two tabs
+    tab1, tab2 = st.tabs(["Single Ticker Deep Dive", "Bulk Extreme Scanner"])
 
     with st.expander("ℹ️ Page Notes: Methodology & Guide"):
         st.markdown("""
@@ -1047,13 +1054,6 @@ def run_ema_distance_app(df_global):
         * **Tickers Input:** Paste a comma-separated list of symbols (e.g., your watchlist or sector holdings).
         * **Filter Results:** Use the dropdown to instantly filter out the noise and only show stocks currently triggering a specific high-conviction combo (like the "Triple Stack" buy or sell). 
         """)
-    
-    # Initialize session state so the bulk scanner remembers data when you change pages
-    if 'ema_bulk_results' not in st.session_state:
-        st.session_state['ema_bulk_results'] = []
-        
-    # Create the two tabs
-    tab1, tab2 = st.tabs(["Single Ticker Deep Dive", "Bulk Extreme Scanner"])
     
     # ==========================================
     # TAB 1: SINGLE TICKER DEEP DIVE
