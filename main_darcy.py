@@ -1163,6 +1163,29 @@ def run_ema_distance_app(df_global):
     # TAB 2: BULK SCANNER
     # ==========================================
     with tab2:
+
+        with st.expander("ℹ️ Page Notes: Scanner Guide"):
+            st.markdown("""
+            ### 🚀 Bulk Extreme Scanner
+            This tab allows you to run the mean reversion analysis across dozens of tickers at once to hunt for active setups.
+            
+            **1. Inputs**
+            * **Tickers Input:** Paste a comma-separated list of symbols (e.g., your watchlist, portfolio, or sector holdings).
+            * **Years to Analyze:** How much historical data the tool should crunch to determine the baseline percentiles for each stock. 
+            
+            **2. Filter Results**
+            Use the dropdown to instantly filter out the noise and only show stocks currently triggering a specific high-conviction combo. 
+            * **All Tickers (No Filter):** Shows the current status of every ticker you entered, regardless of whether it's at an extreme.
+            * **Any Combo Triggered:** Shows only tickers that are currently firing at least one of the Buy or Sell combo signals.
+            * **Specific Combos (Double EMA, Fast vs Swing, Triple Stack):** Isolates the list to show *only* the tickers triggering that exact setup today.
+            
+            **3. How to Read the Table**
+            * 🟢 **Buy:** The distance from the moving average is at or below the 10th percentile (p10).
+            * 🔴 **Sell:** The distance from the moving average is at or above the 90th percentile (p90).
+            * ⚪ **Neutral:** The price is resting somewhere between the historical extremes.
+            * **Active Combos:** Lists exactly which multi-timeframe setups are currently valid for that stock.
+            """)
+        
         col_in3, col_in4, _ = st.columns([2, 1, 1])
         with col_in3:
             tickers_input = st.text_area("Tickers (comma separated)", value="AAPL, TSLA, NVDA, MSFT", height=100, key="t2_tickers").upper().strip()
