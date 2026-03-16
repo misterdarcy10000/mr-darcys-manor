@@ -1007,6 +1007,46 @@ def run_seasonality_app(df_global):
 
 def run_ema_distance_app(df_global):
     st.title("📏 EMA Distance Analysis")
+
+    with st.expander("ℹ️ Page Notes: Methodology & Guide"):
+        st.markdown("""
+        ### 🧠 The Core Concept: Mean Reversion
+        This tool measures how far the current stock price is "stretched" away from its moving averages compared to its own historical baseline. Moving averages act like gravity; when the price gets too far away, it tends to snap back. 
+        
+        Instead of using arbitrary percentages, this tool looks at **years of history** to find the exact percentiles for that specific stock:
+        * **Gap:** The current percentage distance between the Close Price and the Moving Average.
+        * **p10 (Extreme Buy):** The bottom 10% of historical distances. The price is historically very "compressed" or stretched to the downside relative to the MA.
+        * **p90 (Extreme Sell):** The top 90% of historical distances. The price is historically over-extended to the upside.
+        * **p50 (Median):** The normal, average resting distance between the price and the MA.
+        
+        ---
+        
+        ### 🔎 Tab 1: Single Ticker Deep Dive
+        This tab provides a granular look at a single stock's current extension levels and runs a live backtest on historical extremes.
+        
+        **1. Metric Table (Current Signals)**
+        * 🟢 **Extreme Buy:** The current gap is at or below the historical p10 level.
+        * 🔴 **Extreme Sell:** The current gap is at or above the historical p90 level.
+        * ↗️ **Pullback (Bull):** The gap is resting at or below the median (p50), but the price is still holding above the 8-EMA (healthy trend pullback).
+        
+        **2. Combo Over-Extension Signals & Backtesting**
+        The tool checks if the stock is triggering multiple extreme signals at the exact same time:
+        * **Double EMA:** Both the 8-EMA and 21-EMA are at extreme extensions simultaneously.
+        * **Fast vs Swing:** The 8-EMA (fast) and 50-SMA (swing) are at extremes.
+        * **Triple Stack:** The 8, 21, and 50 are all at extreme extensions.
+        
+        It then runs a **historical backtest** on every time this combo triggered in the past to see if the stock successfully "mean reverted" by 8% within the next 30 trading days:
+        * **Occurrences:** How many times this exact combo has happened in the selected timeframe.
+        * **Hit Rate:** The percentage of times the stock successfully reversed by at least 8% after the signal fired.
+        * **Median Days:** How many days it usually took to hit that 8% reversal target.
+        
+        ---
+        
+        ### 🚀 Tab 2: Bulk Extreme Scanner
+        This tab allows you to run the exact same analysis across dozens of tickers at once to hunt for active setups.
+        * **Tickers Input:** Paste a comma-separated list of symbols (e.g., your watchlist or sector holdings).
+        * **Filter Results:** Use the dropdown to instantly filter out the noise and only show stocks currently triggering a specific high-conviction combo (like the "Triple Stack" buy or sell). 
+        """)
     
     # Initialize session state so the bulk scanner remembers data when you change pages
     if 'ema_bulk_results' not in st.session_state:
