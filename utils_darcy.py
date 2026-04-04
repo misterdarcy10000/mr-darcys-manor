@@ -341,6 +341,14 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
     """Apps: Database, Rankings, Pivot, Strike Zones"""
     try:
         df = pd.read_csv(url, engine='c')
+
+        # DEBUG: Un-comment the line below if you want to see what the app is actually reading
+        # st.write("Columns found:", df.columns.tolist()) 
+
+        if "Trade Date" not in df.columns:
+            st.error(f"Critical Error: 'Trade Date' column not found. Found: {df.columns.tolist()}")
+            st.stop()
+
         want = {"Trade Date", "Order Type", "Symbol", "Strike (Actual)", "Strike", "Expiry", "Contracts", "Dollars", "Error"}
         existing_cols = [c for c in df.columns if c in want]
         df = df[existing_cols]
