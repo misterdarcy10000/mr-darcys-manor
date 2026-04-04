@@ -340,33 +340,42 @@ EMA_DIST_CHART_LOOKBACK = 3650  # 10 Years
 def load_and_clean_data(url: str) -> pd.DataFrame:
     """Apps: Database, Rankings, Pivot, Strike Zones"""
     try:
+        # Load the raw data
         df = pd.read_csv(url, engine='c')
-
-        # DEBUG: Un-comment the line below if you want to see what the app is actually reading
-        # st.write("Columns found:", df.columns.tolist()) 
-
-        if "Trade Date" not in df.columns:
-            st.error(f"Critical Error: 'Trade Date' column not found. Found: {df.columns.tolist()}")
-            st.stop()
-
+        
+        # Standardize headers (removes hidden spaces)
+        df.columns = [str(c).strip() for c in df.columns]
+        
         want = {"Trade Date", "Order Type", "Symbol", "Strike (Actual)", "Strike", "Expiry", "Contracts", "Dollars", "Error"}
         existing_cols = [c for c in df.columns if c in want]
         df = df[existing_cols]
+
+        # Force clean numeric columns (This prevents the 'f' error)
+        for col in ["Dollars", "Contracts", "Strike (Actual)"]:
+            if col in df.columns:
+                # 1. Convert to string to handle mixed data
+                # 2. Strip $ and commas
+                # 3. Force to numeric (errors become NaN)
+                # 4. Fill NaNs with 0.0
+                df[col] = pd.to_numeric(
+                    df[col].astype(str).str.replace(r'[$,]', '', regex=True), 
+                    errors="coerce"
+                ).fillna(0.0)
+
+        # Standard cleaning for remaining columns
         for c in ["Order Type", "Symbol", "Strike", "Expiry"]:
-            if c in df.columns: df[c] = df[c].astype(str).str.strip()
-        if "Dollars" in df.columns and df["Dollars"].dtype == 'object':
-             df["Dollars"] = pd.to_numeric(df["Dollars"].str.replace(r'[$,]', '', regex=True), errors="coerce").fillna(0.0)
-        if "Contracts" in df.columns and df["Contracts"].dtype == 'object':
-             df["Contracts"] = pd.to_numeric(df["Contracts"].str.replace(',', '', regex=False), errors="coerce").fillna(0)
+            if c in df.columns: 
+                df[c] = df[c].astype(str).str.strip()
+
         if "Trade Date" in df.columns:
             df["Trade Date"] = pd.to_datetime(df["Trade Date"], errors="coerce")
         if "Expiry" in df.columns:
             df["Expiry_DT"] = pd.to_datetime(df["Expiry"], errors="coerce")
-        if "Strike (Actual)" in df.columns:
-            df["Strike (Actual)"] = pd.to_numeric(df["Strike (Actual)"], errors="coerce").fillna(0.0)
+
         if "Error" in df.columns:
             mask = df["Error"].astype(str).str.upper().isin({"TRUE", "1", "YES"})
             df = df[~mask]
+            
         return df
     except Exception as e:
         st.error(f"Error loading global data: {e}")
