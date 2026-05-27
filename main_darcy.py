@@ -220,20 +220,29 @@ def run_pivot_tables_app(df):
         with fc2: td_end = st.date_input("Trade End Date", value=st.session_state.saved_pv_end, key="pv_end", on_change=save_pv_state, args=("pv_end", "saved_pv_end"))
         with fc3: ticker_filter = st.text_input("Ticker (blank=all)", value=st.session_state.saved_pv_ticker, key="pv_ticker", on_change=save_pv_state, args=("pv_ticker", "saved_pv_ticker")).strip().upper()
         
-        fc4, fc5, fc6 = st.columns(3)
+        # UPDATED: 4 columns to include Min Premium
+        fc4, fc5, fc6, fc7 = st.columns(4)
         with fc4: 
             opts_not = list(ud.PIVOT_NOTIONAL_MAP.keys())
             curr_not = st.session_state.saved_pv_notional
             idx_not = opts_not.index(curr_not) if curr_not in opts_not else 0
-            sel_not = st.selectbox("Min Dollars", options=opts_not, index=idx_not, key="pv_notional", on_change=save_pv_state, args=("pv_notional", "saved_pv_notional"))
+            # UPDATED: Renamed Label to Min Notional
+            sel_not = st.selectbox("Min Notional", options=opts_not, index=idx_not, key="pv_notional", on_change=save_pv_state, args=("pv_notional", "saved_pv_notional"))
             min_notional = ud.PIVOT_NOTIONAL_MAP[sel_not]
-        with fc5: 
+        with fc5:
+            opts_prem = list(ud.PIVOT_PREMIUM_MAP.keys())
+            curr_prem = st.session_state.saved_pv_premium
+            idx_prem = opts_prem.index(curr_prem) if curr_prem in opts_prem else 0
+            # NEW: Min Premium Filter
+            sel_prem = st.selectbox("Min Premium", options=opts_prem, index=idx_prem, key="pv_premium", on_change=save_pv_state, args=("pv_premium", "saved_pv_premium"))
+            min_premium = ud.PIVOT_PREMIUM_MAP[sel_prem]
+        with fc6: 
             opts_mc = list(ud.PIVOT_MC_MAP.keys())
             curr_mc = st.session_state.saved_pv_mkt_cap
             idx_mc = opts_mc.index(curr_mc) if curr_mc in opts_mc else 0
             sel_mc = st.selectbox("Mkt Cap Min", options=opts_mc, index=idx_mc, key="pv_mkt_cap", on_change=save_pv_state, args=("pv_mkt_cap", "saved_pv_mkt_cap"))
             min_mkt_cap = ud.PIVOT_MC_MAP[sel_mc]
-        with fc6: 
+        with fc7: 
             opts_ema = ["All", "Yes"]
             curr_ema = st.session_state.saved_pv_ema
             idx_ema = opts_ema.index(curr_ema) if curr_ema in opts_ema else 0
@@ -271,10 +280,12 @@ def run_pivot_tables_app(df):
     if d_range.empty: return
 
     cb_pool, ps_pool, pb_pool, df_rr = ud.generate_pivot_pools(d_range)
-    df_cb_f = ud.filter_pivot_dataframe(cb_pool, ticker_filter, min_notional, min_mkt_cap, ema_filter)
-    df_ps_f = ud.filter_pivot_dataframe(ps_pool, ticker_filter, min_notional, min_mkt_cap, ema_filter)
-    df_pb_f = ud.filter_pivot_dataframe(pb_pool, ticker_filter, min_notional, min_mkt_cap, ema_filter)
-    df_rr_f = ud.filter_pivot_dataframe(df_rr, ticker_filter, min_notional, min_mkt_cap, ema_filter)
+    
+    # UPDATED: Passing min_premium into the dataframe filter functions
+    df_cb_f = ud.filter_pivot_dataframe(cb_pool, ticker_filter, min_notional, min_premium, min_mkt_cap, ema_filter)
+    df_ps_f = ud.filter_pivot_dataframe(ps_pool, ticker_filter, min_notional, min_premium, min_mkt_cap, ema_filter)
+    df_pb_f = ud.filter_pivot_dataframe(pb_pool, ticker_filter, min_notional, min_premium, min_mkt_cap, ema_filter)
+    df_rr_f = ud.filter_pivot_dataframe(df_rr, ticker_filter, min_notional, min_premium, min_mkt_cap, ema_filter)
 
     row1_c1, row1_c2, row1_c3 = st.columns(3)
     with row1_c1:

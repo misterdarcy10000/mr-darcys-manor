@@ -268,14 +268,16 @@ RANK_TOP_IDEAS_COUNT = 3
 
 # --- CONSTANTS: PIVOT APP ---
 PIVOT_NOTIONAL_MAP = {"0M": 0, "5M": 5e6, "10M": 1e7, "50M": 5e7, "100M": 1e8}
+PIVOT_PREMIUM_MAP = {"$0": 0, "$500K": 5e5, "$1M": 1e6, "$5M": 5e6, "$10M": 1e7}
 PIVOT_MC_MAP = {"0B": 0, "10B": 1e10, "50B": 5e10, "100B": 1e11, "200B": 2e11, "500B": 5e11, "1T": 1e12}
-PIVOT_TABLE_FMT = {"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}
+PIVOT_TABLE_FMT = {"Notional": "${:,.0f}", "Premium": "${:,.0f}", "Contracts": "{:,.0f}"}
 COLUMN_CONFIG_PIVOT = {
     "Symbol": st.column_config.TextColumn("Sym", width=None),
     "Strike": st.column_config.TextColumn("Strike", width=None),
     "Expiry_Table": st.column_config.TextColumn("Exp", width=None),
     "Contracts": st.column_config.NumberColumn("Qty", width=None),
-    "Dollars": st.column_config.NumberColumn("Dollars", width=None),
+    "Notional": st.column_config.NumberColumn("Notional", width=None),
+    "Premium": st.column_config.NumberColumn("Premium", width=None),
 }
 
 # --- CONSTANTS: STRIKE ZONES APP ---
@@ -911,7 +913,7 @@ def generate_top_ideas(top_bulls_df, global_df):
 def initialize_pivot_state(start_default, max_date):
     defaults = {
         'saved_pv_start': max_date, 'saved_pv_end': max_date, 'saved_pv_ticker': "",
-        'saved_pv_notional': "10M", 'saved_pv_mkt_cap': "50B", 'saved_pv_ema': "All",
+        'saved_pv_notional': "10M", 'saved_pv_premium': "$500K", 'saved_pv_mkt_cap': "50B", 'saved_pv_ema': "All",
         'saved_calc_strike': 100.0, 'saved_calc_premium': 2.50, 'saved_calc_expiry': date.today() + timedelta(days=30)
     }
     for key, val in defaults.items():
@@ -928,27 +930,106 @@ def generate_pivot_pools(d_range):
     rr_matches = pd.merge(cb_pool, ps_pool, on=keys + ['occ'], suffixes=('_c', '_p'))
     
     if not rr_matches.empty:
-        rr_c = rr_matches[['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars_c', 'Strike_c']].copy()
-        rr_c.rename(columns={'Dollars_c': 'Dollars', 'Strike_c': 'Strike'}, inplace=True)
+        # Build Call-side pairings
+        cols_c = ['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars_c', 'Strike_c']
+        rename_c = {'Dollars_c': 'Dollars', 'Strike_c': 'Strike'}
+        if 'Premium_c' in rr_matches.columns: 
+            cols_c.append('Premium_c')
+            rename_c['Premium_c'] = 'Premium'
+            
+        rr_c = rr_matches[cols_c].copy()
+        rr_c.rename(columns=rename_c, inplace=True)
         rr_c['Pair_ID'] = rr_matches.index
         rr_c['Pair_Side'] = 0 
-        rr_p = rr_matches[['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars_p', 'Strike_p']].copy()
-        rr_p.rename(columns={'Dollars_p': 'Dollars', 'Strike_p': 'Strike'}, inplace=True)
+        
+        # Build Put-side pairings
+        cols_p = ['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars_p', 'Strike_p']
+        rename_p = {'Dollars_p': 'Dollars', 'Strike_p': 'Strike'}
+        if 'Premium_p' in rr_matches.columns:
+            cols_p.append('Premium_p')
+            rename_p['Premium_p'] = 'Premium'
+            
+        rr_p = rr_matches[cols_p].copy()
+        rr_p.rename(columns=rename_p, inplace=True)
         rr_p['Pair_ID'] = rr_matches.index
         rr_p['Pair_Side'] = 1 
+        
         df_rr = pd.concat([rr_c, rr_p])
         df_rr['Strike'] = df_rr['Strike'].apply(clean_strike_fmt)
         match_keys = keys + ['occ']
+        
         def _filter_out(pool, matches):
             temp = matches[match_keys].copy()
             temp['_remove'] = True
             merged = pool.merge(temp, on=match_keys, how='left')
             return merged[merged['_remove'].isna()].drop(columns=['_remove'])
+            
         cb_pool = _filter_out(cb_pool, rr_matches)
         ps_pool = _filter_out(ps_pool, rr_matches)
     else:
-        df_rr = pd.DataFrame(columns=['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars', 'Strike', 'Pair_ID', 'Pair_Side'])
+        empty_cols = ['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars', 'Strike', 'Pair_ID', 'Pair_Side']
+        if 'Premium' in d_range.columns: empty_cols.append('Premium')
+        df_rr = pd.DataFrame(columns=empty_cols)
+        
     return cb_pool, ps_pool, pb_pool, df_rr
+
+def filter_pivot_dataframe(data, ticker_filter, min_notional, min_premium, min_mkt_cap, ema_filter):
+    if data.empty: return data
+    f = data.copy()
+    if ticker_filter: f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
+    
+    # Filter for Dollars (Notional)
+    f = f[f["Dollars"] >= min_notional]
+    
+    # Filter for Premium
+    if "Premium" in f.columns:
+        f = f[f["Premium"] >= min_premium]
+        
+    if not f.empty and (min_mkt_cap > 0 or ema_filter == "Yes"):
+        unique_symbols = f["Symbol"].unique()
+        valid_symbols = set(unique_symbols)
+        if min_mkt_cap > 0:
+            valid_symbols = {s for s in valid_symbols if get_market_cap(s) >= float(min_mkt_cap)}
+        if ema_filter == "Yes":
+            batch_results = fetch_technicals_batch(list(valid_symbols))
+            valid_symbols = {
+                s for s in valid_symbols 
+                if batch_results.get(s, (None, None))[2] is None or 
+                (batch_results[s][0] is not None and batch_results[s][2] is not None and batch_results[s][0] > batch_results[s][2])
+            }
+        f = f[f["Symbol"].isin(valid_symbols)]
+    return f
+
+def get_pivot_styled_view(data, is_rr=False):
+    if data.empty:
+        cols = ["Symbol", "Strike", "Expiry_Table", "Contracts", "Notional"]
+        if "Premium" in data.columns: cols.append("Premium")
+        return pd.DataFrame(columns=cols)
+        
+    sr = data.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
+    
+    if is_rr: 
+        piv = data.merge(sr, on="Symbol").sort_values(by=["Total_Sym_Dollars", "Pair_ID", "Pair_Side"], ascending=[False, True, True])
+    else:
+        # We need to aggregate the Premium column identically to the Dollars
+        agg_dict = {"Contracts": "sum", "Dollars": "sum"}
+        if "Premium" in data.columns: 
+            agg_dict["Premium"] = "sum"
+            
+        piv = data.groupby(["Symbol", "Strike", "Expiry_DT"]).agg(agg_dict).reset_index().merge(sr, on="Symbol")
+        piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
+        
+    piv["Expiry_Fmt"] = piv["Expiry_DT"].dt.strftime("%d %b %y")
+    piv["Symbol_Display"] = np.where(piv["Symbol"] == piv["Symbol"].shift(1), "", piv["Symbol"])
+    
+    # Rename Dollars to Notional
+    piv.rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table", "Dollars": "Notional"}, inplace=True)
+    
+    # Prepare the final output order
+    out_cols = ["Symbol", "Strike", "Expiry_Table", "Contracts", "Notional"]
+    if "Premium" in piv.columns: out_cols.append("Premium")
+    
+    return piv[out_cols]
 
 def filter_pivot_dataframe(data, ticker_filter, min_notional, min_mkt_cap, ema_filter):
     if data.empty: return data
