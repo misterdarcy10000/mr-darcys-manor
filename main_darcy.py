@@ -334,17 +334,17 @@ def run_strike_zones_app(df):
                 fixed_size_choice = st.select_slider("Fixed bucket size ($)", options=[1, 5, 10, 25, 50, 100], value=st.session_state.saved_sz_fixed, key="sz_fixed", on_change=save_sz_state, args=("sz_fixed", "saved_sz_fixed"))
             else: fixed_size_choice = ud.SZ_DEFAULT_FIXED_SIZE
         with c_sub2:
-            st.markdown("**Include**")
-            inc_cb = st.checkbox("Calls Bought", value=st.session_state.saved_sz_inc_cb, key="sz_inc_cb", on_change=save_sz_state, args=("sz_inc_cb", "saved_sz_inc_cb"))
-            inc_ps = st.checkbox("Puts Sold", value=st.session_state.saved_sz_inc_ps, key="sz_inc_ps", on_change=save_sz_state, args=("sz_inc_ps", "saved_sz_inc_ps"))
-            inc_pb = st.checkbox("Puts Bought", value=st.session_state.saved_sz_inc_pb, key="sz_inc_pb", on_change=save_sz_state, args=("sz_inc_pb", "saved_sz_inc_pb"))
-            
-            # ADDED: Radio Button Toggle for Chart Calculations
+            # MOVED: Calculate Using is now above the Include checkboxes
             st.markdown("**Calculate Using**")
             val_options = ["Notional", "Premium"]
             curr_val = st.session_state.saved_sz_val_type
             val_idx = val_options.index(curr_val) if curr_val in val_options else 0
             val_type = st.radio("Calculate Using", val_options, index=val_idx, label_visibility="collapsed", key="sz_val_type", on_change=save_sz_state, args=("sz_val_type", "saved_sz_val_type"))
+            
+            st.markdown("**Include**")
+            inc_cb = st.checkbox("Calls Bought", value=st.session_state.saved_sz_inc_cb, key="sz_inc_cb", on_change=save_sz_state, args=("sz_inc_cb", "saved_sz_inc_cb"))
+            inc_ps = st.checkbox("Puts Sold", value=st.session_state.saved_sz_inc_ps, key="sz_inc_ps", on_change=save_sz_state, args=("sz_inc_ps", "saved_sz_inc_ps"))
+            inc_pb = st.checkbox("Puts Bought", value=st.session_state.saved_sz_inc_pb, key="sz_inc_pb", on_change=save_sz_state, args=("sz_inc_pb", "saved_sz_inc_pb"))
             
     with col_visuals: chart_container = st.container()
 
@@ -355,14 +355,12 @@ def run_strike_zones_app(df):
 
     order_type_col = "Order Type" if "Order Type" in edit_pool_raw.columns else "Order type"
     
-    # ADDED: Handle dynamic columns for editor to include Premium
     editor_cols = ["Include", "Trade Date", order_type_col, "Symbol", "Strike", "Expiry_DT", "Contracts", "Dollars"]
     if "Premium" in edit_pool_raw.columns:
         editor_cols.append("Premium")
         
     editor_input = edit_pool_raw[editor_cols].copy()
     
-    # ADDED: Rename Dollars to Notional purely for UI table view
     editor_input.rename(columns={"Dollars": "Notional"}, inplace=True)
     
     editor_input["Notional"] = pd.to_numeric(editor_input["Notional"], errors='coerce').fillna(0)
@@ -390,7 +388,6 @@ def run_strike_zones_app(df):
     st.subheader("Data Table & Selection")
     edited_df = st.data_editor(editor_input, column_config=column_configuration, disabled=disabled_cols, hide_index=True, use_container_width=True, key="sz_editor")
     
-    # The f_final inherits the checked rows, retaining the original raw Dollars/Premium data
     f_final = edit_pool_raw[edited_df["Include"]].copy()
     st.markdown("<br><br>", unsafe_allow_html=True)
 
@@ -408,7 +405,6 @@ def run_strike_zones_app(df):
             if sma200: badges.append(f'<span class="badge">SMA(200): ${sma200:,.2f} ({pct_from_spot(sma200)})</span>')
             st.markdown('<div class="metric-row">' + "".join(badges) + "</div>", unsafe_allow_html=True)
             
-            # Map the user's toggle setting back to the appropriate dataframe column
             target_value_col = "Premium" if val_type == "Premium" else "Dollars"
 
             if view_mode == "Price Zones":
