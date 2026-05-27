@@ -346,12 +346,13 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         # Standardize headers (removes hidden spaces)
         df.columns = [str(c).strip() for c in df.columns]
         
-        want = {"Trade Date", "Order Type", "Symbol", "Strike (Actual)", "Strike", "Expiry", "Contracts", "Dollars", "Error"}
+        # ADDED 'Premium' to the want set
+        want = {"Trade Date", "Order Type", "Symbol", "Strike (Actual)", "Strike", "Expiry", "Contracts", "Dollars", "Premium", "Error"}
         existing_cols = [c for c in df.columns if c in want]
         df = df[existing_cols]
 
-        # Force clean numeric columns (This prevents the 'f' error)
-        for col in ["Dollars", "Contracts", "Strike (Actual)"]:
+        # ADDED 'Premium' to the numeric cleaning loop
+        for col in ["Dollars", "Contracts", "Strike (Actual)", "Premium"]:
             if col in df.columns:
                 # 1. Convert to string to handle mixed data
                 # 2. Strip $ and commas
@@ -604,13 +605,30 @@ def _highlight_db_order_type(val):
 def get_database_styled_view(df):
     if df.empty: return df
     order_type_col = "Order Type" if "Order Type" in df.columns else "Order type"
+    
+    # Base columns to display
     display_cols = ["Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
+    
+    # Append Premium if it exists in the dataframe
+    if "Premium" in df.columns:
+        display_cols.append("Premium")
+        
     f_display = df[display_cols].copy()
+    
+    # Rename Dollars to Notional Dollars for the UI
+    f_display.rename(columns={"Dollars": "Notional Dollars"}, inplace=True)
+    
     if not pd.api.types.is_string_dtype(f_display["Trade Date"]):
         f_display["Trade Date"] = f_display["Trade Date"].dt.strftime(DB_DATE_FMT)
     try: f_display["Expiry"] = pd.to_datetime(f_display["Expiry"]).dt.strftime(DB_DATE_FMT)
     except: pass 
-    return f_display.style.format({"Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}).map(_highlight_db_order_type, subset=[order_type_col])
+    
+    # Setup dynamic format dictionary
+    format_dict = {"Notional Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}
+    if "Premium" in f_display.columns:
+        format_dict["Premium"] = "${:,.0f}"
+        
+    return f_display.style.format(format_dict).map(_highlight_db_order_type, subset=[order_type_col])
 
 def filter_database_trades(df, ticker, start_date, end_date, exp_end, inc_cb, inc_ps, inc_pb):
     if df.empty: return pd.DataFrame()
