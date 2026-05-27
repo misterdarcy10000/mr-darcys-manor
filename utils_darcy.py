@@ -1022,6 +1022,9 @@ def get_pivot_styled_view(data, is_rr=False):
     piv["Expiry_Fmt"] = piv["Expiry_DT"].dt.strftime("%d %b %y")
     piv["Symbol_Display"] = np.where(piv["Symbol"] == piv["Symbol"].shift(1), "", piv["Symbol"])
     
+    # FIX: Drop the original Symbol column before renaming Symbol_Display
+    piv.drop(columns=["Symbol"], inplace=True)
+    
     # Rename Dollars to Notional
     piv.rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table", "Dollars": "Notional"}, inplace=True)
     
@@ -1030,7 +1033,6 @@ def get_pivot_styled_view(data, is_rr=False):
     if "Premium" in piv.columns: out_cols.append("Premium")
     
     return piv[out_cols]
-
 
 # --- STRIKE ZONES APP ---
 
