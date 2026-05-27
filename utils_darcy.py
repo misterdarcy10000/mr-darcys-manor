@@ -346,20 +346,17 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         # Standardize headers (removes hidden spaces)
         df.columns = [str(c).strip() for c in df.columns]
         
-        # ADDED 'Premium' to the want set
+        # 1. ADDED 'Premium' to the want set
         want = {"Trade Date", "Order Type", "Symbol", "Strike (Actual)", "Strike", "Expiry", "Contracts", "Dollars", "Premium", "Error"}
         existing_cols = [c for c in df.columns if c in want]
         df = df[existing_cols]
 
-        # ADDED 'Premium' to the numeric cleaning loop
+        # 2. ADDED 'Premium' to the numeric cleaning loop 
+        # (Also added \s to the regex to strip any hidden whitespace from the GSHEET)
         for col in ["Dollars", "Contracts", "Strike (Actual)", "Premium"]:
             if col in df.columns:
-                # 1. Convert to string to handle mixed data
-                # 2. Strip $ and commas
-                # 3. Force to numeric (errors become NaN)
-                # 4. Fill NaNs with 0.0
                 df[col] = pd.to_numeric(
-                    df[col].astype(str).str.replace(r'[$,]', '', regex=True), 
+                    df[col].astype(str).str.replace(r'[$,\s]', '', regex=True), 
                     errors="coerce"
                 ).fillna(0.0)
 
