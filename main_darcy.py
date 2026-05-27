@@ -88,7 +88,6 @@ def run_rankings_app(df):
             st.session_state[saved_key] = st.session_state[key]
     
     # UI Inputs
-    # UPDATED: Adjusted columns to fit 5 items on one row
     c1, c2, c3, c4, c5 = st.columns([1, 1, 0.6, 1, 1], gap="small")
     
     with c1: 
@@ -98,20 +97,16 @@ def run_rankings_app(df):
     with c3: 
         limit = st.number_input("Limit", value=st.session_state.saved_rank_limit, min_value=1, max_value=200, key="rank_limit", on_change=save_rank_state, args=("rank_limit", "saved_rank_limit"))
     with c4: 
-        # UPDATED: Use Keys from Utils
         mc_options = list(ud.RANK_MC_THRESHOLDS.keys())
         default_mc_index = mc_options.index("10B") if "10B" in mc_options else 0
         min_mkt_cap_rank = st.selectbox("Min Market Cap", mc_options, index=default_mc_index, key="rank_mc", on_change=save_rank_state, args=("rank_mc", "saved_rank_mc"))
     with c5:
-        # UPDATED: Converted Checkbox to Selectbox
         saved_ema = st.session_state.saved_rank_ema
-        # Handle both boolean (legacy) and string (new) state
         ema_idx = 1 if (saved_ema is True or saved_ema == "Yes") else 0
-        
         ema_str = st.selectbox("Hide < 8 EMA", ["No", "Yes"], index=ema_idx, key="rank_ema", on_change=save_rank_state, args=("rank_ema", "saved_rank_ema"))
         filter_ema = (ema_str == "Yes")
 
-    # --- INSERT USER GUIDE HERE ---
+    # --- UPDATED USER GUIDE ---
     with st.expander("ℹ️ Page User Guide"):
         st.markdown("### 🏆 Methodology Breakdown")
         ug1, ug2 = st.columns(2, gap="medium")
@@ -119,7 +114,9 @@ def run_rankings_app(df):
             st.markdown("**1. 🧠 Smart Money Score (0-100)**")
             st.markdown("""
             A weighted multi-factor model designed to identify high-conviction institutional flow, normalized on a 0-100 scale.
-            * **Sentiment (35%):** Net Premium `(Calls Bought + Puts Sold) - Puts Bought`.
+            * **Sentiment (35%):** Net Flow `(Calls Bought + Puts Sold) - Puts Bought`. 
+                * The **Notional** tab calculates this using the total Notional value of the contracts.
+                * The **Premium** tab calculates this using the actual Premium paid/collected.
             * **Impact (30%):** Sentiment relative to Market Cap (detects "outsized" bets).
             * **Momentum (35%):** Flow velocity over the last 3 active trading days.
             """)
@@ -131,7 +128,7 @@ def run_rankings_app(df):
             * **Sorting:** Ranked by this raw Score first, then by total Trade Count.
             """)
         st.markdown("---")
-        st.caption("💡 **Top 3 Ideas:** This tab takes the top **Smart Money** candidates and runs them through a technical filter (Trend Alignment, RSI, Whale Support levels) to find the best confluence.")
+        st.caption("💡 **Top 3 Ideas:** This tab takes the top **Smart Money (Notional)** candidates and runs them through a technical filter (Trend Alignment, RSI, Whale Support levels) to find the best confluence.")
     # ------------------------------
 
     f_filtered = ud.filter_rankings_data(df, rank_start, rank_end)
@@ -140,14 +137,20 @@ def run_rankings_app(df):
         st.warning("No trades found matching these dates.")
         return
 
-    tab_rank, tab_ideas, tab_vol = st.tabs(["🧠 Smart Money", "💡 Top 3", "🤡 Bulltard"])
+    # ADDED: Splitting the Smart Money tabs
+    tab_sm_not, tab_sm_prem, tab_ideas, tab_vol = st.tabs(["🧠 Smart Money (Notional)", "🧠 Smart Money (Premium)", "💡 Top 3", "🤡 Bulltard"])
     mc_thresh = ud.RANK_MC_THRESHOLDS.get(min_mkt_cap_rank, 1e10)
+    
     with st.spinner("Crunching numbers..."):
-        top_bulls, top_bears, valid_data = ud.calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit)
+        # Calculate Notional
+        top_bulls_not, top_bears_not, valid_data_not = ud.calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit, value_col="Dollars")
+        # Calculate Premium
+        top_bulls_prem, top_bears_prem, valid_data_prem = ud.calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit, value_col="Premium")
 
-    with tab_rank:
+    # Helper function to render the UI for the two Smart Money tabs cleanly
+    def render_smart_money_tab(top_bulls, top_bears, valid_data, label):
         if valid_data.empty:
-            st.warning("Not enough data for Smart Money scores.")
+            st.warning(f"Not enough data for Smart Money {label} scores.")
         else:
             sm_config = {
                 "Symbol": st.column_config.TextColumn("Ticker", width=60),
@@ -167,11 +170,17 @@ def run_rankings_app(df):
                     st.dataframe(top_bears[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=ud.get_table_height(top_bears, max_rows=100))
         st.markdown("<br><br>", unsafe_allow_html=True)
 
+    with tab_sm_not:
+        render_smart_money_tab(top_bulls_not, top_bears_not, valid_data_not, "(Notional)")
+        
+    with tab_sm_prem:
+        render_smart_money_tab(top_bulls_prem, top_bears_prem, valid_data_prem, "(Premium)")
+
     with tab_ideas:
-        if top_bulls.empty: st.info("No Bullish candidates found to analyze.")
+        if top_bulls_not.empty: st.info("No Bullish candidates found to analyze.")
         else:
-            st.caption(f"ℹ️ Analyzing the Top {len(top_bulls)} 'Smart Money' tickers for confluence...")
-            best_ideas = ud.generate_top_ideas(top_bulls, df)
+            st.caption(f"ℹ️ Analyzing the Top {len(top_bulls_not)} 'Smart Money (Notional)' tickers for confluence...")
+            best_ideas = ud.generate_top_ideas(top_bulls_not, df)
             cols = st.columns(3)
             for i, cand in enumerate(best_ideas):
                 with cols[i]:

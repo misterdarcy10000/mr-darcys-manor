@@ -674,7 +674,7 @@ def filter_rankings_data(df, start_date, end_date):
     f = f[f[order_type_col].isin(target_types)]
     return f
 
-def calculate_smart_money_score(df, start_d, end_d, mc_thresh, filter_ema, limit):
+def calculate_smart_money_score(df, start_d, end_d, mc_thresh, filter_ema, limit, value_col="Dollars"):
     f = df.copy()
     if start_d: f = f[f["Trade Date"].dt.date >= start_d]
     if end_d: f = f[f["Trade Date"].dt.date <= end_d]
@@ -685,13 +685,18 @@ def calculate_smart_money_score(df, start_d, end_d, mc_thresh, filter_ema, limit
     f = f[f[order_type_col].isin(target_types)].copy()
     if f.empty: return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-    f["Signed_Dollars"] = np.where(f[order_type_col].isin(["Calls Bought", "Puts Sold"]), f["Dollars"], -f["Dollars"])
+    # Safely handle if Premium isn't in the dataset yet
+    if value_col not in f.columns: 
+        f[value_col] = 0.0
+
+    # Calculate based on the dynamic value_col (Dollars vs Premium)
+    f["Signed_Value"] = np.where(f[order_type_col].isin(["Calls Bought", "Puts Sold"]), f[value_col], -f[value_col])
     
     smart_stats = f.groupby("Symbol").agg(
-        Signed_Dollars=("Signed_Dollars", "sum"), Trade_Count=("Symbol", "count"), Last_Trade=("Trade Date", "max")
+        Signed_Value=("Signed_Value", "sum"), Trade_Count=("Symbol", "count"), Last_Trade=("Trade Date", "max")
     ).reset_index()
     
-    smart_stats.rename(columns={"Signed_Dollars": "Net Sentiment ($)"}, inplace=True)
+    smart_stats.rename(columns={"Signed_Value": "Net Sentiment ($)"}, inplace=True)
     unique_tickers = smart_stats["Symbol"].unique().tolist()
     batch_caps = fetch_market_caps_batch(unique_tickers)
     smart_stats["Market Cap"] = smart_stats["Symbol"].map(batch_caps)
@@ -700,7 +705,7 @@ def calculate_smart_money_score(df, start_d, end_d, mc_thresh, filter_ema, limit
     unique_dates = sorted(f["Trade Date"].unique())
     recent_dates = unique_dates[-3:] if len(unique_dates) >= 3 else unique_dates
     f_momentum = f[f["Trade Date"].isin(recent_dates)]
-    mom_stats = f_momentum.groupby("Symbol")["Signed_Dollars"].sum().reset_index().rename(columns={"Signed_Dollars": "Momentum ($)"})
+    mom_stats = f_momentum.groupby("Symbol")["Signed_Value"].sum().reset_index().rename(columns={"Signed_Value": "Momentum ($)"})
     
     valid_data = valid_data.merge(mom_stats, on="Symbol", how="left").fillna(0)
     top_bulls = pd.DataFrame(); top_bears = pd.DataFrame()
