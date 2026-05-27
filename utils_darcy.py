@@ -1031,7 +1031,6 @@ def get_pivot_styled_view(data, is_rr=False):
     
     return piv[out_cols]
 
-def filter_pivot_dataframe(data, ticker_filter, min_notional, min_mkt_cap, ema_filter):
     if data.empty: return data
     f = data.copy()
     if ticker_filter: f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
