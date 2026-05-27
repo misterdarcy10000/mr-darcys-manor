@@ -606,25 +606,33 @@ def get_database_styled_view(df):
     if df.empty: return df
     order_type_col = "Order Type" if "Order Type" in df.columns else "Order type"
     
-    # Base columns to display
-    display_cols = ["Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts", "Dollars"]
+    # Start with base columns that we know must exist
+    display_cols = ["Trade Date", order_type_col, "Symbol", "Strike", "Expiry", "Contracts"]
     
-    # Append Premium if it exists in the dataframe
+    # Add Dollars and Premium only if the app successfully sees them
+    if "Dollars" in df.columns:
+        display_cols.append("Dollars")
     if "Premium" in df.columns:
         display_cols.append("Premium")
         
-    f_display = df[display_cols].copy()
+    # Safely extract only the columns that exist
+    actual_cols = [c for c in display_cols if c in df.columns]
+    f_display = df[actual_cols].copy()
     
     # Rename Dollars to Notional Dollars for the UI
-    f_display.rename(columns={"Dollars": "Notional Dollars"}, inplace=True)
+    if "Dollars" in f_display.columns:
+        f_display.rename(columns={"Dollars": "Notional Dollars"}, inplace=True)
     
+    # Format Dates
     if not pd.api.types.is_string_dtype(f_display["Trade Date"]):
         f_display["Trade Date"] = f_display["Trade Date"].dt.strftime(DB_DATE_FMT)
     try: f_display["Expiry"] = pd.to_datetime(f_display["Expiry"]).dt.strftime(DB_DATE_FMT)
     except: pass 
     
     # Setup dynamic format dictionary
-    format_dict = {"Notional Dollars": "${:,.0f}", "Contracts": "{:,.0f}"}
+    format_dict = {"Contracts": "{:,.0f}"}
+    if "Notional Dollars" in f_display.columns:
+        format_dict["Notional Dollars"] = "${:,.0f}"
     if "Premium" in f_display.columns:
         format_dict["Premium"] = "${:,.0f}"
         
