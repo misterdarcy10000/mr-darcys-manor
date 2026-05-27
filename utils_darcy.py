@@ -1040,7 +1040,8 @@ def initialize_strike_zone_state(exp_default):
     defaults = {
         'saved_sz_ticker': "AMZN", 'saved_sz_start': None, 'saved_sz_end': None,
         'saved_sz_exp': exp_default, 'saved_sz_view': "Price Zones", 'saved_sz_width_mode': "Auto",
-        'saved_sz_fixed': SZ_DEFAULT_FIXED_SIZE, 'saved_sz_inc_cb': True, 'saved_sz_inc_ps': True, 'saved_sz_inc_pb': True
+        'saved_sz_fixed': SZ_DEFAULT_FIXED_SIZE, 'saved_sz_inc_cb': True, 'saved_sz_inc_ps': True, 'saved_sz_inc_pb': True,
+        'saved_sz_val_type': "Notional"
     }
     for key, val in defaults.items():
         if key not in st.session_state: st.session_state[key] = val
@@ -1075,10 +1076,13 @@ def get_strike_zone_technicals(ticker):
     if spot is None: spot = 100.0
     return spot, ema8, ema21, sma200
 
-def generate_price_zones_html(df, spot, width_mode, fixed_size, hide_empty=True):
+def generate_price_zones_html(df, spot, width_mode, fixed_size, hide_empty=True, value_col="Dollars"):
     f = df.copy()
     order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
-    f["Signed Dollars"] = np.where(f[order_type_col].isin(["Calls Bought", "Puts Sold"]), 1, -1) * f["Dollars"].fillna(0.0)
+    
+    if value_col not in f.columns: f[value_col] = 0.0
+        
+    f["Signed Dollars"] = np.where(f[order_type_col].isin(["Calls Bought", "Puts Sold"]), 1, -1) * f[value_col].fillna(0.0)
     strike_vals = f["Strike (Actual)"].values
     strike_min, strike_max = float(np.nanmin(strike_vals)), float(np.nanmax(strike_vals))
     
@@ -1119,10 +1123,13 @@ def generate_price_zones_html(df, spot, width_mode, fixed_size, hide_empty=True)
     html_out.append('</div>')
     return "".join(html_out)
 
-def generate_expiry_buckets_html(df):
+def generate_expiry_buckets_html(df, value_col="Dollars"):
     f = df.copy()
     order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
-    f["Signed Dollars"] = np.where(f[order_type_col].isin(["Calls Bought", "Puts Sold"]), 1, -1) * f["Dollars"].fillna(0.0)
+    
+    if value_col not in f.columns: f[value_col] = 0.0
+        
+    f["Signed Dollars"] = np.where(f[order_type_col].isin(["Calls Bought", "Puts Sold"]), 1, -1) * f[value_col].fillna(0.0)
     days_diff = (pd.to_datetime(f["Expiry_DT"]).dt.date - date.today()).apply(lambda x: x.days)
     f["Bucket"] = pd.cut(days_diff, bins=SZ_BUCKET_BINS, labels=SZ_BUCKET_LABELS, include_lowest=True)
     agg = f.groupby("Bucket").agg(Net_Dollars=("Signed Dollars","sum"), Trades=("Signed Dollars","count")).reset_index()

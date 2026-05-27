@@ -331,7 +331,6 @@ def run_strike_zones_app(df):
             st.markdown("**Zone Width**")
             width_mode = st.radio("Select Sizing", ["Auto", "Fixed"], index=0 if st.session_state.saved_sz_width_mode == "Auto" else 1, label_visibility="collapsed", key="sz_width_mode", on_change=save_sz_state, args=("sz_width_mode", "saved_sz_width_mode"))
             if width_mode == "Fixed": 
-                # UPDATED: Use Constant for Default
                 fixed_size_choice = st.select_slider("Fixed bucket size ($)", options=[1, 5, 10, 25, 50, 100], value=st.session_state.saved_sz_fixed, key="sz_fixed", on_change=save_sz_state, args=("sz_fixed", "saved_sz_fixed"))
             else: fixed_size_choice = ud.SZ_DEFAULT_FIXED_SIZE
         with c_sub2:
@@ -339,6 +338,13 @@ def run_strike_zones_app(df):
             inc_cb = st.checkbox("Calls Bought", value=st.session_state.saved_sz_inc_cb, key="sz_inc_cb", on_change=save_sz_state, args=("sz_inc_cb", "saved_sz_inc_cb"))
             inc_ps = st.checkbox("Puts Sold", value=st.session_state.saved_sz_inc_ps, key="sz_inc_ps", on_change=save_sz_state, args=("sz_inc_ps", "saved_sz_inc_ps"))
             inc_pb = st.checkbox("Puts Bought", value=st.session_state.saved_sz_inc_pb, key="sz_inc_pb", on_change=save_sz_state, args=("sz_inc_pb", "saved_sz_inc_pb"))
+            
+            # ADDED: Radio Button Toggle for Chart Calculations
+            st.markdown("**Calculate Using**")
+            val_options = ["Notional", "Premium"]
+            curr_val = st.session_state.saved_sz_val_type
+            val_idx = val_options.index(curr_val) if curr_val in val_options else 0
+            val_type = st.radio("Calculate Using", val_options, index=val_idx, label_visibility="collapsed", key="sz_val_type", on_change=save_sz_state, args=("sz_val_type", "saved_sz_val_type"))
             
     with col_visuals: chart_container = st.container()
 
@@ -348,23 +354,43 @@ def run_strike_zones_app(df):
         return
 
     order_type_col = "Order Type" if "Order Type" in edit_pool_raw.columns else "Order type"
-    editor_input = edit_pool_raw[["Include", "Trade Date", order_type_col, "Symbol", "Strike", "Expiry_DT", "Contracts", "Dollars"]].copy()
-    editor_input["Dollars"] = pd.to_numeric(editor_input["Dollars"], errors='coerce').fillna(0)
+    
+    # ADDED: Handle dynamic columns for editor to include Premium
+    editor_cols = ["Include", "Trade Date", order_type_col, "Symbol", "Strike", "Expiry_DT", "Contracts", "Dollars"]
+    if "Premium" in edit_pool_raw.columns:
+        editor_cols.append("Premium")
+        
+    editor_input = edit_pool_raw[editor_cols].copy()
+    
+    # ADDED: Rename Dollars to Notional purely for UI table view
+    editor_input.rename(columns={"Dollars": "Notional"}, inplace=True)
+    
+    editor_input["Notional"] = pd.to_numeric(editor_input["Notional"], errors='coerce').fillna(0)
     editor_input["Contracts"] = pd.to_numeric(editor_input["Contracts"], errors='coerce').fillna(0)
+    if "Premium" in editor_input.columns:
+        editor_input["Premium"] = pd.to_numeric(editor_input["Premium"], errors='coerce').fillna(0)
 
     column_configuration = {
         "Include": st.column_config.CheckboxColumn("Include", default=True),
         "Trade Date": st.column_config.DateColumn("Trade Date", format="DD MMM YY"),
         "Expiry_DT": st.column_config.DateColumn("Expiry", format="DD MMM YY"),
-        "Dollars": st.column_config.NumberColumn("Dollars", format="$%d"),
+        "Notional": st.column_config.NumberColumn("Notional", format="$%d"),
         "Contracts": st.column_config.NumberColumn("Qty", format="%d"),
         order_type_col: st.column_config.TextColumn("Order Type"),
         "Symbol": st.column_config.TextColumn("Symbol"),
         "Strike": st.column_config.TextColumn("Strike"),
     }
     
+    disabled_cols = ["Trade Date", order_type_col, "Symbol", "Strike", "Expiry_DT", "Contracts", "Notional"]
+    
+    if "Premium" in editor_input.columns:
+        column_configuration["Premium"] = st.column_config.NumberColumn("Premium", format="$%d")
+        disabled_cols.append("Premium")
+    
     st.subheader("Data Table & Selection")
-    edited_df = st.data_editor(editor_input, column_config=column_configuration, disabled=["Trade Date", order_type_col, "Symbol", "Strike", "Expiry_DT", "Contracts", "Dollars"], hide_index=True, use_container_width=True, key="sz_editor")
+    edited_df = st.data_editor(editor_input, column_config=column_configuration, disabled=disabled_cols, hide_index=True, use_container_width=True, key="sz_editor")
+    
+    # The f_final inherits the checked rows, retaining the original raw Dollars/Premium data
     f_final = edit_pool_raw[edited_df["Include"]].copy()
     st.markdown("<br><br>", unsafe_allow_html=True)
 
@@ -381,12 +407,15 @@ def run_strike_zones_app(df):
             if ema21: badges.append(f'<span class="badge">EMA(21): ${ema21:,.2f} ({pct_from_spot(ema21)})</span>')
             if sma200: badges.append(f'<span class="badge">SMA(200): ${sma200:,.2f} ({pct_from_spot(sma200)})</span>')
             st.markdown('<div class="metric-row">' + "".join(badges) + "</div>", unsafe_allow_html=True)
+            
+            # Map the user's toggle setting back to the appropriate dataframe column
+            target_value_col = "Premium" if val_type == "Premium" else "Dollars"
 
             if view_mode == "Price Zones":
-                html_code = ud.generate_price_zones_html(f_final, spot, width_mode, fixed_size_choice)
+                html_code = ud.generate_price_zones_html(f_final, spot, width_mode, fixed_size_choice, value_col=target_value_col)
                 st.markdown(html_code, unsafe_allow_html=True)
             else:
-                html_code = ud.generate_expiry_buckets_html(f_final)
+                html_code = ud.generate_expiry_buckets_html(f_final, value_col=target_value_col)
                 st.markdown(html_code, unsafe_allow_html=True)
             st.caption("ℹ️ You can exclude individual trades from the graphic by unchecking them in the Data Tables box below.")
 
