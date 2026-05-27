@@ -1031,36 +1031,6 @@ def get_pivot_styled_view(data, is_rr=False):
     
     return piv[out_cols]
 
-    if data.empty: return data
-    f = data.copy()
-    if ticker_filter: f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
-    f = f[f["Dollars"] >= min_notional]
-    if not f.empty and (min_mkt_cap > 0 or ema_filter == "Yes"):
-        unique_symbols = f["Symbol"].unique()
-        valid_symbols = set(unique_symbols)
-        if min_mkt_cap > 0:
-            valid_symbols = {s for s in valid_symbols if get_market_cap(s) >= float(min_mkt_cap)}
-        if ema_filter == "Yes":
-            batch_results = fetch_technicals_batch(list(valid_symbols))
-            valid_symbols = {
-                s for s in valid_symbols 
-                if batch_results.get(s, (None, None))[2] is None or 
-                (batch_results[s][0] is not None and batch_results[s][2] is not None and batch_results[s][0] > batch_results[s][2])
-            }
-        f = f[f["Symbol"].isin(valid_symbols)]
-    return f
-
-def get_pivot_styled_view(data, is_rr=False):
-    if data.empty: return pd.DataFrame(columns=["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"])
-    sr = data.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
-    if is_rr: piv = data.merge(sr, on="Symbol").sort_values(by=["Total_Sym_Dollars", "Pair_ID", "Pair_Side"], ascending=[False, True, True])
-    else:
-        piv = data.groupby(["Symbol", "Strike", "Expiry_DT"]).agg({"Contracts": "sum", "Dollars": "sum"}).reset_index().merge(sr, on="Symbol")
-        piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
-    piv["Expiry_Fmt"] = piv["Expiry_DT"].dt.strftime("%d %b %y")
-    piv["Symbol_Display"] = np.where(piv["Symbol"] == piv["Symbol"].shift(1), "", piv["Symbol"])
-    return piv.drop(columns=["Symbol"]).rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table"})[["Symbol", "Strike", "Expiry_Table", "Contracts", "Dollars"]]
-
 
 # --- STRIKE ZONES APP ---
 
