@@ -751,6 +751,73 @@ def calculate_smart_money_score(df, start_d, end_d, mc_thresh, filter_ema, limit
         
     return top_bulls, top_bears, valid_data
 
+def calculate_impact_rankings(df, start_d, end_d, mc_thresh, filter_ema, limit):
+    """Calculates rankings based strictly on Premium as a % of Market Cap."""
+    f = df.copy()
+    if start_d: f = f[f["Trade Date"].dt.date >= start_d]
+    if end_d: f = f[f["Trade Date"].dt.date <= end_d]
+    if f.empty: return pd.DataFrame(), pd.DataFrame()
+
+    order_type_col = "Order Type" if "Order Type" in f.columns else "Order type"
+    target_types = ["Calls Bought", "Puts Sold", "Puts Bought"]
+    f = f[f[order_type_col].isin(target_types)].copy()
+    if f.empty: return pd.DataFrame(), pd.DataFrame()
+
+    # Safely handle if Premium isn't in the dataset
+    if "Premium" not in f.columns: 
+        f["Premium"] = 0.0
+
+    # Net Premium calculation
+    f["Signed_Value"] = np.where(f[order_type_col].isin(["Calls Bought", "Puts Sold"]), f["Premium"], -f["Premium"])
+    
+    smart_stats = f.groupby("Symbol").agg(
+        Signed_Value=("Signed_Value", "sum"), Trade_Count=("Symbol", "count"), Last_Trade=("Trade Date", "max")
+    ).reset_index()
+    
+    smart_stats.rename(columns={"Signed_Value": "Net Premium"}, inplace=True)
+    unique_tickers = smart_stats["Symbol"].unique().tolist()
+    batch_caps = fetch_market_caps_batch(unique_tickers)
+    smart_stats["Market Cap"] = smart_stats["Symbol"].map(batch_caps)
+    
+    valid_data = smart_stats[smart_stats["Market Cap"] >= mc_thresh].copy()
+    if valid_data.empty: return pd.DataFrame(), pd.DataFrame()
+
+    # The Metric: Total Premium as a Percentage of Market Cap
+    valid_data["Impact_Pct"] = (valid_data["Net Premium"] / valid_data["Market Cap"]) * 100
+    valid_data["Last Trade"] = valid_data["Last_Trade"].dt.strftime("%d %b")
+    
+    # Sort out Bulls (Positive Impact) and Bears (Negative Impact)
+    candidates_bull = valid_data[valid_data["Impact_Pct"] > 0].sort_values(by="Impact_Pct", ascending=False).head(limit * 3)
+    candidates_bear = valid_data[valid_data["Impact_Pct"] < 0].sort_values(by="Impact_Pct", ascending=True).head(limit * 3)
+    
+    # Absolute value for Bear scoring display
+    candidates_bear["Impact_Pct"] = candidates_bear["Impact_Pct"].abs()
+
+    all_tickers = set(candidates_bull["Symbol"]).union(set(candidates_bear["Symbol"]))
+    batch_techs = fetch_technicals_batch(list(all_tickers)) if filter_ema else {}
+
+    def apply_ema_filter(df_c, mode="Bull"):
+        if not filter_ema:
+            df_c["Score"] = df_c["Impact_Pct"]
+            df_c["Trend"] = "—"
+            return df_c.head(limit)
+        def check_row(t):
+            s, e8, _, _, _ = batch_techs.get(t, (None, None, None, None, None))
+            if not s or not e8: return False, "—"
+            if mode == "Bull": return (s > e8), ("✅ >EMA8" if s > e8 else "⚠️ <EMA8")
+            return (s < e8), ("✅ <EMA8" if s < e8 else "⚠️ >EMA8")
+        results = [check_row(t) for t in df_c["Symbol"]]
+        mask = [r[0] for r in results]; trends = [r[1] for r in results]
+        filtered = df_c[mask].copy()
+        filtered["Trend"] = [t for i, t in enumerate(trends) if mask[i]]
+        filtered["Score"] = filtered["Impact_Pct"]
+        return filtered.head(limit)
+
+    top_bulls = apply_ema_filter(candidates_bull, "Bull")
+    top_bears = apply_ema_filter(candidates_bear, "Bear")
+        
+    return top_bulls, top_bears
+
 def calculate_volume_rankings(f_filtered, mc_thresh, filter_ema, limit):
     if f_filtered.empty: return pd.DataFrame(), pd.DataFrame()
     order_type_col = "Order Type" if "Order Type" in f_filtered.columns else "Order type"
