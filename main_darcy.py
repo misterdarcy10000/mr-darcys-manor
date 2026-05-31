@@ -75,62 +75,103 @@ def run_database_app(df):
     st.markdown("<br><br><br>", unsafe_allow_html=True)
 
 def run_rankings_app(df):
-    st.markdown("<h2 style='text-align: center; color: #EAEAEA;'>📊 Smart Money Rankings</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #A0A0A0; font-size:14px; margin-top:-10px;'>Analyze aggregated multi-factor or impact-based institutional flows.</p>", unsafe_allow_html=True)
-    st.markdown("<hr style='margin-top: 5px; margin-bottom: 20px; border-color: #333;'/>", unsafe_allow_html=True)
+    st.title("🏆 Rankings")
+    max_data_date = ud.get_max_trade_date(df)
+    
+    # Use Constant for Lookback
+    start_default = max_data_date - timedelta(days=ud.RANK_LOOKBACK_DAYS)
+    
+    ud.initialize_rankings_state(start_default, max_data_date)
 
-    # 1. Sidebar controls specific to rankings
-    with st.sidebar:
-        st.markdown("### 🎛️ Ranking Filters")
-        
-        # Limit control
-        limit = st.number_input("Max Tickers per Table", min_value=3, max_value=25, value=10, step=1)
-        
-        # Market Cap Filter
-        min_mkt_cap_rank = st.selectbox(
-            "Min Market Cap",
-            options=["Mega ($200B+)", "Large ($10B+)", "Mid ($2B+)", "Small ($300M+)", "All"],
-            index=1  # Default to Large ($10B+)
-        )
-        
-        # Technical confirmation filter
-        filter_ema = st.checkbox("Require EMA8 Trend Confirmation", value=False, help="Bullish: Price > EMA8 | Bearish: Price < EMA8")
-        
-        # Date filtering within sidebar
+    def save_rank_state(key, saved_key):
+        if key in st.session_state:
+            st.session_state[saved_key] = st.session_state[key]
+    
+    # UI Inputs
+    c1, c2, c3, c4, c5 = st.columns([1, 1, 0.6, 1, 1], gap="small")
+    
+    with c1: 
+        rank_start = st.date_input("Trade Start Date", value=st.session_state.saved_rank_start, key="rank_start", on_change=save_rank_state, args=("rank_start", "saved_rank_start"))
+    with c2: 
+        rank_end = st.date_input("Trade End Date", value=st.session_state.saved_rank_end, key="rank_end", on_change=save_rank_state, args=("rank_end", "saved_rank_end"))
+    with c3: 
+        limit = st.number_input("Limit", value=st.session_state.saved_rank_limit, min_value=1, max_value=200, key="rank_limit", on_change=save_rank_state, args=("rank_limit", "saved_rank_limit"))
+    with c4: 
+        mc_options = list(ud.RANK_MC_THRESHOLDS.keys())
+        default_mc_index = mc_options.index("10B") if "10B" in mc_options else 0
+        min_mkt_cap_rank = st.selectbox("Min Market Cap", mc_options, index=default_mc_index, key="rank_mc", on_change=save_rank_state, args=("rank_mc", "saved_rank_mc"))
+    with c5:
+        saved_ema = st.session_state.saved_rank_ema
+        ema_idx = 1 if (saved_ema is True or saved_ema == "Yes") else 0
+        ema_str = st.selectbox("Hide < 8 EMA", ["No", "Yes"], index=ema_idx, key="rank_ema", on_change=save_rank_state, args=("rank_ema", "saved_rank_ema"))
+        filter_ema = (ema_str == "Yes")
+
+    # --- UPDATED USER GUIDE ---
+    with st.expander("ℹ️ Page User Guide"):
+        st.markdown("### 🏆 Methodology Breakdown")
+        ug1, ug2 = st.columns(2, gap="medium")
+        with ug1:
+            st.markdown("**1. 🧠 Smart Money Score (0-100)**")
+            st.markdown("""
+            A weighted multi-factor model designed to identify high-conviction institutional flow, normalized on a 0-100 scale.
+            * **Sentiment (35%):** Net Flow `(Calls Bought + Puts Sold) - Puts Bought`. 
+                * The **Notional** tab calculates this using the total Notional value of the contracts.
+                * The **Premium** tab calculates this using the actual Premium paid/collected.
+            * **Impact (30%):** Sentiment relative to Market Cap (detects "outsized" bets).
+            * **Momentum (35%):** Flow velocity over the last 3 active trading days.
+            """)
+        with ug2:
+            st.markdown("**2. 🤡 Legacy Volume Score**")
+            st.markdown("""
+            A raw counting metric for determining simple directionality.
+            * **Formula:** `(Calls Bought + Puts Sold) - Puts Bought`.
+            * **Sorting:** Ranked by this raw Score first, then by total Trade Count.
+            """)
         st.markdown("---")
-        st.markdown("📅 **Ranking Lookback Window**")
-        df_sorted = df.sort_values("Trade Date")
-        min_date = df_sorted["Trade Date"].min().date()
-        max_date = df_sorted["Trade Date"].max().date()
-        
-        rank_start = st.date_input("Start Date", value=min_date, min_value=min_date, max_value=max_date, key="rank_start")
-        rank_end = st.date_input("End Date", value=max_date, min_value=min_date, max_value=max_date, key="rank_end")
-        
-        if rank_start > rank_end:
-            st.error("Error: Start Date must be before End Date.")
-            return
+        st.caption("💡 **Top 3 Ideas:** This tab takes the top **Smart Money (Notional)** candidates and runs them through a technical filter (Trend Alignment, RSI, Whale Support levels) to find the best confluence.")
+    # ------------------------------
 
-    # Map selected Market Cap rank threshold
+    f_filtered = ud.filter_rankings_data(df, rank_start, rank_end)
+    
+    if f_filtered.empty:
+        st.warning("No trades found matching these dates.")
+        return
+
+    # ADDED: Splitting the Smart Money tabs and reordering with the new Premium vs Market Cap tab
+    tab_prem_mc, tab_sm_prem, tab_sm_not, tab_ideas, tab_vol = st.tabs(["Premium vs Market Cap", "🧠 Smart Money (Premium)", "🧠 Smart Money (Notional)", "💡 Top 3", "🤡 Bulltard"])
     mc_thresh = ud.RANK_MC_THRESHOLDS.get(min_mkt_cap_rank, 1e10)
-
-    # 2. Define tabs with the requested updated order
-    tab_prem_mc, tab_sm_prem, tab_sm_not, tab_ideas, tab_vol = st.tabs([
-        "Premium vs Market Cap", 
-        "🧠 Smart Money (Premium)", 
-        "🧠 Smart Money (Notional)", 
-        "💡 Top 3", 
-        "🤡 Bulltard"
-    ])
-
+    
     with st.spinner("Crunching numbers..."):
-        # Calculate Notional Smart Money
+        # Calculate Notional
         top_bulls_not, top_bears_not, valid_data_not = ud.calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit, value_col="Dollars")
-        # Calculate Premium Smart Money
+        # Calculate Premium
         top_bulls_prem, top_bears_prem, valid_data_prem = ud.calculate_smart_money_score(df, rank_start, rank_end, mc_thresh, filter_ema, limit, value_col="Premium")
-        # Calculate Pure Impact Rankings (Premium / Market Cap * 100)
+        # Calculate Impact (NEW)
         top_bulls_impact, top_bears_impact = ud.calculate_impact_rankings(df, rank_start, rank_end, mc_thresh, filter_ema, limit)
 
-    # --- TAB 1: Premium vs Market Cap (Pure Impact) ---
+    # Helper function to render the UI for the two Smart Money tabs cleanly
+    def render_smart_money_tab(top_bulls, top_bears, valid_data, label):
+        if valid_data.empty:
+            st.warning(f"Not enough data for Smart Money {label} scores.")
+        else:
+            sm_config = {
+                "Symbol": st.column_config.TextColumn("Ticker", width=60),
+                "Score": st.column_config.ProgressColumn("Score", format="%d", min_value=0, max_value=100),
+                "Trade_Count": st.column_config.NumberColumn("Qty", width=50),
+                "Last Trade": st.column_config.TextColumn("Last", width=70)
+            }
+            cols_to_show = ["Symbol", "Score", "Trade_Count", "Last Trade"]
+            sm1, sm2 = st.columns(2, gap="large")
+            with sm1:
+                st.markdown(f"<div style='color: #71d28a; font-weight:bold;'>Top Bullish Scores</div>", unsafe_allow_html=True)
+                if not top_bulls.empty:
+                    st.dataframe(top_bulls[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=ud.get_table_height(top_bulls, max_rows=100))
+            with sm2:
+                st.markdown(f"<div style='color: #f29ca0; font-weight:bold;'>Top Bearish Scores</div>", unsafe_allow_html=True)
+                if not top_bears.empty:
+                    st.dataframe(top_bears[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=ud.get_table_height(top_bears, max_rows=100))
+        st.markdown("<br><br>", unsafe_allow_html=True)
+
     with tab_prem_mc:
         st.caption("ℹ️ Ranks stocks purely by Net Premium as a percentage of their total Market Cap (detects outsized flow anomalies).")
         if top_bulls_impact.empty and top_bears_impact.empty:
@@ -154,65 +195,48 @@ def run_rankings_app(df):
                     st.dataframe(top_bears_impact[cols_to_show], use_container_width=True, hide_index=True, column_config=impact_config, height=ud.get_table_height(top_bears_impact, max_rows=100))
         st.markdown("<br><br>", unsafe_allow_html=True)
 
-    # --- TAB 2: Smart Money (Premium Based) ---
     with tab_sm_prem:
-        st.caption("ℹ️ Multi-factor institutional score weighing total options premium, size anomaly, and consistent conviction.")
-        if top_bulls_prem.empty and top_bears_prem.empty:
-            st.warning("Not enough data to calculate Smart Money scores with current filters.")
-        else:
-            sm_config = {
-                "Symbol": st.column_config.TextColumn("Ticker", width=60),
-                "Score": st.column_config.NumberColumn("Score", format="%d pts"),
-                "Trend": st.column_config.TextColumn("Trend", width=80),
-                "Trade_Count": st.column_config.NumberColumn("Qty", width=50),
-                "Last Trade": st.column_config.TextColumn("Last", width=70)
-            }
-            cols_to_show = ["Symbol", "Score", "Trend", "Trade_Count", "Last Trade"]
-            c1, c2 = st.columns(2, gap="large")
-            with c1:
-                st.markdown(f"<div style='color: #71d28a; font-weight:bold;'>Top Bullish Flows</div>", unsafe_allow_html=True)
-                if not top_bulls_prem.empty:
-                    st.dataframe(top_bulls_prem[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=ud.get_table_height(top_bulls_prem, max_rows=100))
-            with c2:
-                st.markdown(f"<div style='color: #f29ca0; font-weight:bold;'>Top Bearish Flows</div>", unsafe_allow_html=True)
-                if not top_bears_prem.empty:
-                    st.dataframe(top_bears_prem[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=ud.get_table_height(top_bears_prem, max_rows=100))
-        st.markdown("<br><br>", unsafe_allow_html=True)
+        render_smart_money_tab(top_bulls_prem, top_bears_prem, valid_data_prem, "(Premium)")
 
-    # --- TAB 3: Smart Money (Notional/Dollars Based) ---
     with tab_sm_not:
-        st.caption("ℹ️ Multi-factor institutional score weighing underlying notional position value, size anomaly, and consistent conviction.")
-        if top_bulls_not.empty and top_bears_not.empty:
-            st.warning("Not enough data to calculate Notional Smart Money scores with current filters.")
+        render_smart_money_tab(top_bulls_not, top_bears_not, valid_data_not, "(Notional)")
+
+    with tab_ideas:
+        if top_bulls_not.empty: st.info("No Bullish candidates found to analyze.")
         else:
-            sm_config = {
-                "Symbol": st.column_config.TextColumn("Ticker", width=60),
-                "Score": st.column_config.NumberColumn("Score", format="%d pts"),
-                "Trend": st.column_config.TextColumn("Trend", width=80),
-                "Trade_Count": st.column_config.NumberColumn("Qty", width=50),
-                "Last Trade": st.column_config.TextColumn("Last", width=70)
-            }
-            cols_to_show = ["Symbol", "Score", "Trend", "Trade_Count", "Last Trade"]
-            cn1, cn2 = st.columns(2, gap="large")
-            with cn1:
-                st.markdown(f"<div style='color: #71d28a; font-weight:bold;'>Top Bullish Notional</div>", unsafe_allow_html=True)
-                if not top_bulls_not.empty:
-                    st.dataframe(top_bulls_not[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=ud.get_table_height(top_bulls_not, max_rows=100))
-            with cn2:
-                st.markdown(f"<div style='color: #f29ca0; font-weight:bold;'>Top Bearish Notional</div>", unsafe_allow_html=True)
-                if not top_bears_not.empty:
-                    st.dataframe(top_bears_not[cols_to_show], use_container_width=True, hide_index=True, column_config=sm_config, height=ud.get_table_height(top_bears_not, max_rows=100))
+            st.caption(f"ℹ️ Analyzing the Top {len(top_bulls_not)} 'Smart Money (Notional)' tickers for confluence...")
+            best_ideas = ud.generate_top_ideas(top_bulls_not, df)
+            cols = st.columns(3)
+            for i, cand in enumerate(best_ideas):
+                with cols[i]:
+                    with st.container(border=True):
+                        st.markdown(f"### #{i+1} {cand['Ticker']}")
+                        st.metric("Conviction", f"{cand['Score']:.1f}/10", f"${cand['Price']:.2f}")
+                        st.markdown("**Strategy:**")
+                        if cand['Suggestions']['Sell Puts']: st.success(f"🛡️ **Sell Put:** {cand['Suggestions']['Sell Puts']}")
+                        if cand['Suggestions']['Buy Calls']: st.info(f"🟢 **Buy Call:** {cand['Suggestions']['Buy Calls']}")
+                        st.markdown("---")
+                        for r in cand['Reasons']: st.caption(f"• {r}")
         st.markdown("<br><br>", unsafe_allow_html=True)
 
-    # --- TAB 4: Top 3 (Ideas Generation) ---
-    with tab_ideas:
-        st.caption("💡 Highly-vetted options activity setups featuring top combined conviction, technical alignments, and clean flow structures.")
-        ud.render_top_3_ideas_tab(valid_data_prem, limit, filter_ema)
-
-    # --- TAB 5: Bulltard (High Volume) ---
     with tab_vol:
-        st.caption("🤡 Direct volume leaders. Pure brute-force volume ranking without any market cap normalizing or smart factor filtering.")
-        ud.render_bulltard_tab(df, rank_start, rank_end, limit)
+        st.caption("ℹ️ Legacy Methodology: Score = (Calls + Puts Sold) - (Puts Bought).")
+        bull_df, bear_df = ud.calculate_volume_rankings(f_filtered, mc_thresh, filter_ema, limit)
+        rank_col_config = {
+            "Symbol": st.column_config.TextColumn("Symbol", width=60),
+            "Trade Count": st.column_config.NumberColumn("#", width=50),
+            "Last Trade": st.column_config.TextColumn("Last Trade", width=90),
+            "Score": st.column_config.NumberColumn("Score", width=50),
+        }
+        cols_final = ["Symbol", "Trade Count", "Last Trade", "Score"]
+        v1, v2 = st.columns(2)
+        with v1:
+            st.markdown(f"<div style='color: #71d28a; font-weight:bold;'>Bullish Volume</div>", unsafe_allow_html=True)
+            if not bull_df.empty: st.dataframe(bull_df[cols_final], use_container_width=True, hide_index=True, column_config=rank_col_config, height=ud.get_table_height(bull_df, max_rows=100))
+        with v2:
+            st.markdown(f"<div style='color: #f29ca0; font-weight:bold;'>Bearish Volume</div>", unsafe_allow_html=True)
+            if not bear_df.empty: st.dataframe(bear_df[cols_final], use_container_width=True, hide_index=True, column_config=rank_col_config, height=ud.get_table_height(bear_df, max_rows=100))
+        st.markdown("<br><br>", unsafe_allow_html=True)
 
 def run_pivot_tables_app(df):
     st.title("🎯 Pivot Tables")
