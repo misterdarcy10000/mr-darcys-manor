@@ -3,13 +3,14 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 
+# --- 0. PAGE CONFIGURATION ---
+# This MUST be the first Streamlit command called
+st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
+
 # --- MODULE IMPORTS ---
 import main_darcy
 import main_sector
 import utils_darcy as ud  # For global data loading & health checks
-
-# --- 0. PAGE CONFIGURATION ---
-st.set_page_config(page_title="Trading Toolbox", layout="wide", page_icon="💎")
 
 # --- 1. CSS STYLING ---
 st.markdown("""<style>
