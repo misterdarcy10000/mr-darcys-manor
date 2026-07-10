@@ -1,6 +1,3 @@
-streamlit
-pandas
-numpy
 yfinance
 streamlit-authenticator
 PyYAML
@@ -11,3 +8,6 @@ google-generativeai
 spicy
 pyarrow
 plotly>=5.15.0
+pandas==2.2.3
+numpy==1.26.4
+streamlit==1.40.0
