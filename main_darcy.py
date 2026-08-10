@@ -1420,21 +1420,6 @@ def run_covid_lows_app(df_global):
         st.info("No dataset selected.")
         return
 
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        covid_start = st.date_input("COVID Window Start", value=date(2020, 2, 15), key="covid_lows_start")
-    with c2:
-        covid_end = st.date_input("COVID Window End", value=date(2020, 4, 15), key="covid_lows_end")
-    with c3:
-        pct_below = st.number_input("% Below Low", min_value=0.0, value=5.0, step=1.0, key="covid_lows_below")
-    with c4:
-        pct_above = st.number_input("% Above Low", min_value=0.0, value=20.0, step=1.0, key="covid_lows_above")
-
-    lookback_bars = st.number_input(
-        "Lookback (trading bars)", min_value=1, value=90, step=1, key="covid_lows_lookback",
-        help="1 = must be in range on the most recent bar only. Higher = flag if it touched the range at any point in that many recent bars."
-    )
-
     try:
         key = dataset_map[data_option]
         master = ud.load_parquet_and_clean(key)
@@ -1451,6 +1436,21 @@ def run_covid_lows_app(df_global):
         with st.expander(f"View Scanned Tickers ({data_option})"):
             unique_tickers = sorted(master[t_col].unique().tolist())
             st.write(f"{len(unique_tickers)} tickers: " + ", ".join(unique_tickers))
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1:
+            covid_start = st.date_input("COVID Window Start", value=ud.COVID_DEFAULT_START, key="covid_lows_start")
+        with c2:
+            covid_end = st.date_input("COVID Window End", value=ud.COVID_DEFAULT_END, key="covid_lows_end")
+        with c3:
+            pct_below = st.number_input("% Below Low", min_value=0.0, value=ud.COVID_DEFAULT_PCT_BELOW, step=1.0, key="covid_lows_below")
+        with c4:
+            pct_above = st.number_input("% Above Low", min_value=0.0, value=ud.COVID_DEFAULT_PCT_ABOVE, step=1.0, key="covid_lows_above")
+        with c5:
+            lookback_bars = st.number_input(
+                "Lookback (bars)", min_value=1, value=ud.COVID_DEFAULT_LOOKBACK, step=1, key="covid_lows_lookback",
+                help="1 = must be in range on the most recent bar only. Higher = flag if it touched the range at any point in that many recent bars."
+            )
 
         with st.spinner("Scanning..."):
             result_df = ud.run_covid_lows_scan(
@@ -1482,6 +1482,10 @@ def run_covid_lows_app(df_global):
                 "Last Bar Date": st.column_config.TextColumn("Data As Of"),
             }
         )
+
+        st.caption("📋 Comma-separated tickers (click the copy icon on hover to copy for a watchlist):")
+        ticker_csv = ", ".join(result_df["Ticker"].tolist())
+        st.code(ticker_csv, language=None)
 
     except Exception as e:
         st.error(f"Error running COVID Lows scan: {e}")
