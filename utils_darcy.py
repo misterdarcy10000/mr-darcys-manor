@@ -1840,3 +1840,83 @@ def run_ema_backtest(signal_series, entry_data, compare_data, lookforward=EMA_DI
     hit_rate = (hits / len(idxs)) * 100 if len(idxs) > 0 else 0
     median_days = np.median(days_to_target) if days_to_target else 0
     return len(idxs), hit_rate, median_days
+
+
+# --- COVID LOWS APP ---
+
+def run_covid_lows_scan(master, t_col, covid_start, covid_end,
+                         pct_below=5.0, pct_above=20.0, lookback_bars=90):
+    """
+    Flags tickers whose price has recently (within lookback_bars) traded
+    within [-pct_below%, +pct_above%] of their COVID-crash low.
+
+    master        : combined DataFrame (ChartDate, LOW, CLOSE, ticker col, etc.)
+    t_col         : name of the ticker/symbol column in master
+    covid_start   : 'YYYY-MM-DD' string (or date) - start of COVID low window
+    covid_end     : 'YYYY-MM-DD' string (or date) - end of COVID low window
+    pct_below     : max % BELOW the covid low still counted as "in range"
+    pct_above     : max % ABOVE the covid low still counted as "in range"
+    lookback_bars : how many of the most recent bars to check for a touch
+    """
+    date_col = next((c for c in master.columns if 'DATE' in c.upper()), None)
+    low_col = 'LOW' if 'LOW' in master.columns else None
+    close_col = 'CLOSE' if 'CLOSE' in master.columns else None
+
+    if not date_col or not low_col or not close_col or not t_col:
+        return pd.DataFrame()
+
+    df = master.copy()
+    df[date_col] = pd.to_datetime(df[date_col])
+    df = df.sort_values([t_col, date_col])
+
+    covid_start_dt = pd.to_datetime(covid_start)
+    covid_end_dt = pd.to_datetime(covid_end)
+
+    results = []
+    for ticker, g in df.groupby(t_col):
+        window = g[(g[date_col] >= covid_start_dt) & (g[date_col] <= covid_end_dt)]
+        if window.empty:
+            continue
+
+        covid_low = window[low_col].min()
+        if pd.isna(covid_low) or covid_low <= 0:
+            continue
+
+        lower_bound = covid_low * (1 - pct_below / 100)
+        upper_bound = covid_low * (1 + pct_above / 100)
+
+        recent = g.tail(int(lookback_bars))
+        if recent.empty:
+            continue
+
+        in_range_mask = (recent[close_col] >= lower_bound) & (recent[close_col] <= upper_bound)
+        was_in_range = bool(in_range_mask.any())
+        if not was_in_range:
+            continue
+
+        last_row = g.iloc[-1]
+        last_close = last_row[close_col]
+        last_date = last_row[date_col]
+        pct_from_low = ((last_close - covid_low) / covid_low) * 100
+
+        # Find the most recent date it actually touched the range
+        touch_dates = recent.loc[in_range_mask, date_col]
+        last_touch = touch_dates.max() if not touch_dates.empty else pd.NaT
+        days_since_touch = (last_date - last_touch).days if pd.notna(last_touch) else None
+
+        results.append({
+            "Ticker": ticker,
+            "COVID Low": round(float(covid_low), 2),
+            "Last Close": round(float(last_close), 2),
+            "% From COVID Low": round(float(pct_from_low), 1),
+            "Currently In Range": bool(in_range_mask.iloc[-1]),
+            "Last Touch Date": last_touch.strftime('%Y-%m-%d') if pd.notna(last_touch) else "",
+            "Days Since Touch": days_since_touch,
+            "Last Bar Date": last_date.strftime('%Y-%m-%d'),
+        })
+
+    if not results:
+        return pd.DataFrame()
+
+    res_df = pd.DataFrame(results).sort_values("% From COVID Low").reset_index(drop=True)
+    return res_df

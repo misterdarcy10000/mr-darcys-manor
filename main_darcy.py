@@ -1391,3 +1391,97 @@ def run_ema_distance_app(df_global):
                 )
             else:
                 st.info(f"No tickers matched the criteria for: {filter_choice}")
+
+def run_covid_lows_app(df_global):
+    st.title("🦠 COVID Lows Scanner")
+    st.caption("Flags tickers currently trading near their Feb-Apr 2020 COVID-crash low.")
+
+    dataset_map = ud.get_parquet_config()
+    options = list(dataset_map.keys())
+
+    with st.expander("ℹ️ Page User Guide"):
+        st.markdown("""
+        * **Dataset**: Selects the universe of stocks to scan (e.g., SP500, NASDAQ).
+        * **COVID Window**: The date range used to find each ticker's crash low (default Feb 15 - Apr 15, 2020).
+        * **% Below / % Above Low**: The band around that low counted as "in range" (e.g. -5% / +20%).
+        * **Lookback (bars)**: How many of the most recent trading days to check for a touch into that band.
+          Set to 1 for "must be in range right now"; higher (e.g. 90) for "has touched the range recently and may still be nearby."
+        """)
+
+    data_option = st.pills(
+        "Dataset", options=options,
+        selection_mode="single",
+        default=options[0] if options else None,
+        label_visibility="collapsed",
+        key="covid_lows_pills"
+    )
+
+    if not data_option:
+        st.info("No dataset selected.")
+        return
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        covid_start = st.date_input("COVID Window Start", value=date(2020, 2, 15), key="covid_lows_start")
+    with c2:
+        covid_end = st.date_input("COVID Window End", value=date(2020, 4, 15), key="covid_lows_end")
+    with c3:
+        pct_below = st.number_input("% Below Low", min_value=0.0, value=5.0, step=1.0, key="covid_lows_below")
+    with c4:
+        pct_above = st.number_input("% Above Low", min_value=0.0, value=20.0, step=1.0, key="covid_lows_above")
+
+    lookback_bars = st.number_input(
+        "Lookback (trading bars)", min_value=1, value=90, step=1, key="covid_lows_lookback",
+        help="1 = must be in range on the most recent bar only. Higher = flag if it touched the range at any point in that many recent bars."
+    )
+
+    try:
+        key = dataset_map[data_option]
+        master = ud.load_parquet_and_clean(key)
+
+        if master is None or master.empty:
+            st.warning("Could not load dataset.")
+            return
+
+        t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
+        if not t_col:
+            st.error("No ticker column found in this dataset.")
+            return
+
+        with st.expander(f"View Scanned Tickers ({data_option})"):
+            unique_tickers = sorted(master[t_col].unique().tolist())
+            st.write(f"{len(unique_tickers)} tickers: " + ", ".join(unique_tickers))
+
+        with st.spinner("Scanning..."):
+            result_df = ud.run_covid_lows_scan(
+                master, t_col,
+                covid_start=covid_start, covid_end=covid_end,
+                pct_below=pct_below, pct_above=pct_above,
+                lookback_bars=lookback_bars
+            )
+
+        if result_df.empty:
+            st.info("No tickers currently near their COVID low with these settings.")
+            return
+
+        st.success(f"{len(result_df)} ticker(s) flagged.")
+
+        st.dataframe(
+            result_df,
+            use_container_width=True,
+            hide_index=True,
+            height=ud.get_table_height(result_df, max_rows=100),
+            column_config={
+                "Ticker": st.column_config.TextColumn("Ticker", width=70),
+                "COVID Low": st.column_config.NumberColumn("COVID Low", format="$%.2f"),
+                "Last Close": st.column_config.NumberColumn("Last Close", format="$%.2f"),
+                "% From COVID Low": st.column_config.NumberColumn("% From Low", format="%+.1f%%"),
+                "Currently In Range": st.column_config.CheckboxColumn("In Range Now"),
+                "Last Touch Date": st.column_config.TextColumn("Last Touch"),
+                "Days Since Touch": st.column_config.NumberColumn("Days Since Touch"),
+                "Last Bar Date": st.column_config.TextColumn("Data As Of"),
+            }
+        )
+
+    except Exception as e:
+        st.error(f"Error running COVID Lows scan: {e}")
