@@ -1392,74 +1392,50 @@ def run_ema_distance_app(df_global):
             else:
                 st.info(f"No tickers matched the criteria for: {filter_choice}")
 
-
 def run_covid_lows_app(df_global):
     st.title("🦠 COVID Lows Scanner")
-    st.caption("Flags tickers currently trading near their Feb-Apr 2020 COVID-crash low, across your full universe.")
+    st.caption("Flags tickers currently trading near their Feb-Apr 2020 COVID-crash low.")
 
     dataset_map = ud.get_parquet_config()
+    options = list(dataset_map.keys())
 
     with st.expander("ℹ️ Page User Guide"):
         st.markdown("""
-        * **Universe**: Automatically combines every dataset you have configured (SP500, SP100, MidCap, etc.), deduped by ticker.
+        * **Dataset**: Selects the universe of stocks to scan (e.g., SP500, NASDAQ).
         * **COVID Window**: The date range used to find each ticker's crash low (default Feb 15 - Apr 15, 2020).
         * **% Below / % Above Low**: The band around that low counted as "in range" (e.g. -5% / +20%).
         * **Lookback (bars)**: How many of the most recent trading days to check for a touch into that band.
           Set to 1 for "must be in range right now"; higher (e.g. 90) for "has touched the range recently and may still be nearby."
         """)
 
-    if not dataset_map:
-        st.warning("No datasets configured.")
+    data_option = st.pills(
+        "Dataset", options=options,
+        selection_mode="single",
+        default=options[0] if options else None,
+        label_visibility="collapsed",
+        key="covid_lows_pills"
+    )
+
+    if not data_option:
+        st.info("No dataset selected.")
         return
 
     try:
-        # --- Load & combine every dataset into one deduped universe ---
-        all_frames = []
-        t_col = None
-        load_status = []
+        key = dataset_map[data_option]
+        master = ud.load_parquet_and_clean(key)
 
-        excluded_datasets = ["SectorRotationsBeta"]  # skip these dataset display names
-
-        with st.spinner("Loading all datasets..."):
-            for name, key in dataset_map.items():
-                if name in excluded_datasets:
-                    load_status.append(f"⏭️ {name}: excluded")
-                    continue
-
-                df_part = ud.load_parquet_and_clean(key)
-                if df_part is None or df_part.empty:
-                    load_status.append(f"⚠️ {name}: no data")
-                    continue
-
-                part_t_col = next((c for c in df_part.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
-                if not part_t_col:
-                    load_status.append(f"⚠️ {name}: no ticker column")
-                    continue
-
-                if t_col is None:
-                    t_col = part_t_col
-                elif part_t_col != t_col:
-                    df_part = df_part.rename(columns={part_t_col: t_col})
-
-                load_status.append(f"✅ {name}: {df_part[part_t_col].nunique()} tickers")
-                all_frames.append(df_part)
-
-        if not all_frames or t_col is None:
-            st.error("Could not load any dataset.")
+        if master is None or master.empty:
+            st.warning("Could not load dataset.")
             return
 
-        master = pd.concat(all_frames, ignore_index=True)
+        t_col = next((c for c in master.columns if c.strip().upper() in ['TICKER', 'SYMBOL']), None)
+        if not t_col:
+            st.error("No ticker column found in this dataset.")
+            return
 
-        # Dedup: keep one row per (ticker, date) in case the same ticker appears in multiple datasets
-        date_col_dedup = next((c for c in master.columns if 'DATE' in c.upper()), None)
-        if date_col_dedup:
-            master = master.drop_duplicates(subset=[t_col, date_col_dedup])
-
-        unique_tickers = sorted(master[t_col].unique().tolist())
-
-        with st.expander(f"View Scanned Tickers ({len(unique_tickers)} unique across all datasets)"):
-            st.caption(" | ".join(load_status))
-            st.write(", ".join(unique_tickers))
+        with st.expander(f"View Scanned Tickers ({data_option})"):
+            unique_tickers = sorted(master[t_col].unique().tolist())
+            st.write(f"{len(unique_tickers)} tickers: " + ", ".join(unique_tickers))
 
         c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
@@ -1488,7 +1464,7 @@ def run_covid_lows_app(df_global):
             st.info("No tickers currently near their COVID low with these settings.")
             return
 
-        st.success(f"{len(result_df)} ticker(s) flagged out of {len(unique_tickers)} scanned.")
+        st.success(f"{len(result_df)} ticker(s) flagged.")
 
         st.dataframe(
             result_df,
@@ -1507,26 +1483,9 @@ def run_covid_lows_app(df_global):
             }
         )
 
-        in_range_df = result_df[result_df["Currently In Range"] == True]
-        out_range_df = result_df[result_df["Currently In Range"] == False]
-
-        st.markdown("**📋 Copy for Watchlist** (click the copy icon on hover to copy)")
-        col_a, col_b, col_c = st.columns(3)
-
-        with col_a:
-            st.caption(f"✅ In Range Now ({len(in_range_df)})")
-            in_range_csv = ", ".join(in_range_df["Ticker"].tolist()) if not in_range_df.empty else "—"
-            st.code(in_range_csv, language=None)
-
-        with col_b:
-            st.caption(f"🕒 Recently, Now Out of Range ({len(out_range_df)})")
-            out_range_csv = ", ".join(out_range_df["Ticker"].tolist()) if not out_range_df.empty else "—"
-            st.code(out_range_csv, language=None)
-
-        with col_c:
-            st.caption(f"📋 All Flagged ({len(result_df)})")
-            all_csv = ", ".join(result_df["Ticker"].tolist()) if not result_df.empty else "—"
-            st.code(all_csv, language=None)
+        st.caption("📋 Comma-separated tickers (click the copy icon on hover to copy for a watchlist):")
+        ticker_csv = ", ".join(result_df["Ticker"].tolist())
+        st.code(ticker_csv, language=None)
 
     except Exception as e:
         st.error(f"Error running COVID Lows scan: {e}")
