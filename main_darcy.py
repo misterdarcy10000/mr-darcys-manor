@@ -1392,6 +1392,7 @@ def run_ema_distance_app(df_global):
             else:
                 st.info(f"No tickers matched the criteria for: {filter_choice}")
 
+
 def run_covid_lows_app(df_global):
     st.title("🦠 COVID Lows Scanner")
     st.caption("Flags tickers currently trading near their Feb-Apr 2020 COVID-crash low, across your full universe.")
@@ -1417,8 +1418,14 @@ def run_covid_lows_app(df_global):
         t_col = None
         load_status = []
 
+        excluded_datasets = ["SectorRotationsBeta"]  # skip these dataset display names
+
         with st.spinner("Loading all datasets..."):
             for name, key in dataset_map.items():
+                if name in excluded_datasets:
+                    load_status.append(f"⏭️ {name}: excluded")
+                    continue
+
                 df_part = ud.load_parquet_and_clean(key)
                 if df_part is None or df_part.empty:
                     load_status.append(f"⚠️ {name}: no data")
