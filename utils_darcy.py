@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 GLOBAL_SESSION = requests.Session()
 
 # --- SHARED CONSTANTS ---
-CACHE_TTL = 43200  # 12 Hours
+CACHE_TTL = 1200  # 20 Minutes
 EMA8_PERIOD = 8
 EMA21_PERIOD = 21
 SMA50_PERIOD = 50
@@ -219,7 +219,7 @@ def parse_periods(periods_str):
     try: return sorted(list(set([int(x.strip()) for x in periods_str.split(',') if x.strip().isdigit()])))
     except: return [5, 21, 63, 126]
 
-@st.cache_data(ttl=43200) 
+@st.cache_data(ttl=CACHE_TTL)
 def get_market_cap(symbol: str) -> float:
     """
     Apps: Rankings (Options), Pivot (Options), Seasonality (Price).

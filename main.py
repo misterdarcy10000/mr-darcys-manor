@@ -119,7 +119,7 @@ try:
         tm_url = st.secrets.get(tm_key, "")
         if not tm_url:
             st.markdown(f"❌ **Ticker Map**: Secret Missing")
-        elif "drive.google.com" not in tm_url:
+        elif "drive.google.com" not in tm_url and "docs.google.com/spreadsheets" not in tm_url:
             st.markdown(f"⚠️ **Ticker Map**: Invalid URL")
         else:
              st.markdown(f"✅ **Ticker Map**: Connected")
