@@ -1003,58 +1003,60 @@ def initialize_pivot_state(start_default, max_date):
         if key not in st.session_state: st.session_state[key] = val
 
 def generate_pivot_pools(d_range):
+    """RR pairing is now computed once upstream (scraper's compute_rr_pairs,
+    matching on trade-ID proximity, not contracts/premium -- real pairs have
+    shown 1:1, 2:1, and dollar-matched-instead-of-contract-matched variants).
+    This just groups by the pre-computed RR Pair ID instead of re-deriving
+    the match here, so the matching rule only lives in one place."""
     order_type_col = "Order Type" if "Order Type" in d_range.columns else "Order type"
     cb_pool = d_range[d_range[order_type_col] == "Calls Bought"].copy()
     ps_pool = d_range[d_range[order_type_col] == "Puts Sold"].copy()
     pb_pool = d_range[d_range[order_type_col] == "Puts Bought"].copy()
-    keys = ['Trade Date', 'Symbol', 'Expiry_DT', 'Contracts']
-    cb_pool['occ'] = cb_pool.groupby(keys).cumcount()
-    ps_pool['occ'] = ps_pool.groupby(keys).cumcount()
-    rr_matches = pd.merge(cb_pool, ps_pool, on=keys + ['occ'], suffixes=('_c', '_p'))
-    
+
+    has_pair_id = "RR Pair ID" in d_range.columns
+    if has_pair_id:
+        # NOTE: must check .notna() explicitly, not just != "" -- on newer
+        # pandas (confirmed on 3.0.5) missing values in a string-dtype column
+        # pass a bare `!= ""` check, which silently turns this into a
+        # cross-join of every unpaired row against every other unpaired row.
+        cb_paired = cb_pool[cb_pool["RR Pair ID"].notna() & (cb_pool["RR Pair ID"] != "")]
+        ps_paired = ps_pool[ps_pool["RR Pair ID"].notna() & (ps_pool["RR Pair ID"] != "")]
+        rr_matches = pd.merge(cb_paired, ps_paired, on="RR Pair ID", suffixes=('_c', '_p'))
+    else:
+        rr_matches = pd.DataFrame()
+
     if not rr_matches.empty:
-        # Build Call-side pairings
-        cols_c = ['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars_c', 'Strike_c']
-        rename_c = {'Dollars_c': 'Dollars', 'Strike_c': 'Strike'}
-        if 'Premium_c' in rr_matches.columns: 
-            cols_c.append('Premium_c')
-            rename_c['Premium_c'] = 'Premium'
-            
-        rr_c = rr_matches[cols_c].copy()
-        rr_c.rename(columns=rename_c, inplace=True)
-        rr_c['Pair_ID'] = rr_matches.index
-        rr_c['Pair_Side'] = 0 
-        
-        # Build Put-side pairings
-        cols_p = ['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars_p', 'Strike_p']
-        rename_p = {'Dollars_p': 'Dollars', 'Strike_p': 'Strike'}
+        cols_c = ['Symbol_c', 'Trade Date_c', 'Expiry_DT_c', 'Contracts_c', 'Dollars_c', 'Strike_c']
+        rename_c = {'Symbol_c': 'Symbol', 'Trade Date_c': 'Trade Date', 'Expiry_DT_c': 'Expiry_DT',
+                    'Contracts_c': 'Contracts', 'Dollars_c': 'Dollars', 'Strike_c': 'Strike'}
+        if 'Premium_c' in rr_matches.columns:
+            cols_c.append('Premium_c'); rename_c['Premium_c'] = 'Premium'
+        rr_c = rr_matches[cols_c].copy().rename(columns=rename_c)
+        rr_c['Pair_ID'] = rr_matches['RR Pair ID']
+        rr_c['Pair_Side'] = 0
+
+        cols_p = ['Symbol_p', 'Trade Date_p', 'Expiry_DT_p', 'Contracts_p', 'Dollars_p', 'Strike_p']
+        rename_p = {'Symbol_p': 'Symbol', 'Trade Date_p': 'Trade Date', 'Expiry_DT_p': 'Expiry_DT',
+                    'Contracts_p': 'Contracts', 'Dollars_p': 'Dollars', 'Strike_p': 'Strike'}
         if 'Premium_p' in rr_matches.columns:
-            cols_p.append('Premium_p')
-            rename_p['Premium_p'] = 'Premium'
-            
-        rr_p = rr_matches[cols_p].copy()
-        rr_p.rename(columns=rename_p, inplace=True)
-        rr_p['Pair_ID'] = rr_matches.index
-        rr_p['Pair_Side'] = 1 
-        
+            cols_p.append('Premium_p'); rename_p['Premium_p'] = 'Premium'
+        rr_p = rr_matches[cols_p].copy().rename(columns=rename_p)
+        rr_p['Pair_ID'] = rr_matches['RR Pair ID']
+        rr_p['Pair_Side'] = 1
+
         df_rr = pd.concat([rr_c, rr_p])
         df_rr['Strike'] = df_rr['Strike'].apply(clean_strike_fmt)
-        match_keys = keys + ['occ']
-        
-        def _filter_out(pool, matches):
-            temp = matches[match_keys].copy()
-            temp['_remove'] = True
-            merged = pool.merge(temp, on=match_keys, how='left')
-            return merged[merged['_remove'].isna()].drop(columns=['_remove'])
-            
-        cb_pool = _filter_out(cb_pool, rr_matches)
-        ps_pool = _filter_out(ps_pool, rr_matches)
+
+        paired_ids = set(rr_matches['RR Pair ID'])
+        cb_pool = cb_pool[~cb_pool['RR Pair ID'].isin(paired_ids)]
+        ps_pool = ps_pool[~ps_pool['RR Pair ID'].isin(paired_ids)]
     else:
         empty_cols = ['Symbol', 'Trade Date', 'Expiry_DT', 'Contracts', 'Dollars', 'Strike', 'Pair_ID', 'Pair_Side']
         if 'Premium' in d_range.columns: empty_cols.append('Premium')
         df_rr = pd.DataFrame(columns=empty_cols)
-        
+
     return cb_pool, ps_pool, pb_pool, df_rr
+
 
 def filter_pivot_dataframe(data, ticker_filter, min_notional, min_premium, min_mkt_cap, ema_filter):
     if data.empty: return data
