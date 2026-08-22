@@ -356,7 +356,9 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
         df.columns = [str(c).strip() for c in df.columns]
         
         # 1. ADDED 'Premium' to the want set
-        want = {"Trade Date", "Order Type", "Symbol", "Strike (Actual)", "Strike", "Expiry", "Contracts", "Dollars", "Premium", "Error"}
+        # 3. ADDED 'RR Pair ID' to the want set (2026-08-22: RR pairing now
+        #    computed once upstream in the scraper, not re-derived per-app)
+        want = {"Trade Date", "Order Type", "Symbol", "Strike (Actual)", "Strike", "Expiry", "Contracts", "Dollars", "Premium", "RR Pair ID", "Error"}
         existing_cols = [c for c in df.columns if c in want]
         df = df[existing_cols]
 
@@ -370,7 +372,8 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
                 ).fillna(0.0)
 
         # Standard cleaning for remaining columns
-        for c in ["Order Type", "Symbol", "Strike", "Expiry"]:
+        # 4. ADDED 'RR Pair ID' here too (it's a string ID, not numeric)
+        for c in ["Order Type", "Symbol", "Strike", "Expiry", "RR Pair ID"]:
             if c in df.columns: 
                 df[c] = df[c].astype(str).str.strip()
 
@@ -387,6 +390,7 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
     except Exception as e:
         st.error(f"Error loading global data: {e}")
         return pd.DataFrame()
+
 
 def get_max_trade_date(df):
     """Apps: Database, Rankings, Pivot, Strike Zones"""
