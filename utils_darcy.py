@@ -372,10 +372,18 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
                 ).fillna(0.0)
 
         # Standard cleaning for remaining columns
-        # 4. ADDED 'RR Pair ID' here too (it's a string ID, not numeric)
-        for c in ["Order Type", "Symbol", "Strike", "Expiry", "RR Pair ID"]:
-            if c in df.columns: 
+        for c in ["Order Type", "Symbol", "Strike", "Expiry"]:
+            if c in df.columns:
                 df[c] = df[c].astype(str).str.strip()
+
+        # 4. ADDED 'RR Pair ID' -- handled separately from the loop above:
+        # fillna("") MUST happen before astype(str), otherwise a missing
+        # value becomes the literal string "nan" (not an empty string), which
+        # then matches every other missing row in generate_pivot_pools's
+        # merge -- confirmed 2026-08-22, this was the actual bug behind RR
+        # pairs going missing / other pools going empty.
+        if "RR Pair ID" in df.columns:
+            df["RR Pair ID"] = df["RR Pair ID"].fillna("").astype(str).str.strip()
 
         if "Trade Date" in df.columns:
             df["Trade Date"] = pd.to_datetime(df["Trade Date"], errors="coerce")
@@ -1015,12 +1023,11 @@ def generate_pivot_pools(d_range):
 
     has_pair_id = "RR Pair ID" in d_range.columns
     if has_pair_id:
-        # NOTE: must check .notna() explicitly, not just != "" -- on newer
-        # pandas (confirmed on 3.0.5) missing values in a string-dtype column
-        # pass a bare `!= ""` check, which silently turns this into a
-        # cross-join of every unpaired row against every other unpaired row.
-        cb_paired = cb_pool[cb_pool["RR Pair ID"].notna() & (cb_pool["RR Pair ID"] != "")]
-        ps_paired = ps_pool[ps_pool["RR Pair ID"].notna() & (ps_pool["RR Pair ID"] != "")]
+        # RR Pair ID is guaranteed a clean "" for unpaired rows (never the
+        # literal string "nan") by load_and_clean_data's fillna("") before
+        # astype(str) -- so a plain != "" is correct and sufficient here.
+        cb_paired = cb_pool[cb_pool["RR Pair ID"] != ""]
+        ps_paired = ps_pool[ps_pool["RR Pair ID"] != ""]
         rr_matches = pd.merge(cb_paired, ps_paired, on="RR Pair ID", suffixes=('_c', '_p'))
     else:
         rr_matches = pd.DataFrame()
