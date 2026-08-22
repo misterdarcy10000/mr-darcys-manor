@@ -319,7 +319,11 @@ def run_pivot_tables_app(df):
     df_cb_f = ud.filter_pivot_dataframe(cb_pool, ticker_filter, min_notional, min_premium, min_mkt_cap, ema_filter)
     df_ps_f = ud.filter_pivot_dataframe(ps_pool, ticker_filter, min_notional, min_premium, min_mkt_cap, ema_filter)
     df_pb_f = ud.filter_pivot_dataframe(pb_pool, ticker_filter, min_notional, min_premium, min_mkt_cap, ema_filter)
-    df_rr_f = ud.filter_pivot_dataframe(df_rr, ticker_filter, min_notional, min_premium, min_mkt_cap, ema_filter)
+    # Risk Reversals intentionally only respects the date range (already
+    # applied via d_range above) -- no min notional/premium/mktcap/ticker
+    # filtering, so every real RR candidate for the day is always visible
+    # (2026-08-22: user wants to see all of them regardless of size).
+    df_rr_f = df_rr
 
     row1_c1, row1_c2, row1_c3 = st.columns(3)
     with row1_c1:
