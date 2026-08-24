@@ -7,7 +7,7 @@ import yfinance as yf
 import math
 import requests
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -16,6 +16,10 @@ GLOBAL_SESSION = requests.Session()
 
 # --- SHARED CONSTANTS ---
 CACHE_TTL = 1200  # 20 Minutes
+DB_CACHE_TTL = 900  # 15 Minutes -- options database now refreshes ~every 15
+                     # min during market hours, so it shouldn't lag behind on
+                     # the same 20-min TTL used by price history/market caps
+                     # (those only update once a day).
 EMA8_PERIOD = 8
 EMA21_PERIOD = 21
 SMA50_PERIOD = 50
@@ -345,9 +349,14 @@ COVID_DEFAULT_LOOKBACK = 10
 # (Shared ONLY between Database, Rankings, Pivot, Strike Zones)
 # ==========================================
 
-@st.cache_data(ttl=CACHE_TTL, show_spinner="Updating Data...")
-def load_and_clean_data(url: str) -> pd.DataFrame:
-    """Apps: Database, Rankings, Pivot, Strike Zones"""
+@st.cache_data(ttl=DB_CACHE_TTL, show_spinner="Updating Data...")
+def load_and_clean_data(url: str):
+    """Apps: Database, Rankings, Pivot, Strike Zones
+    Returns (df, fetched_at). fetched_at is captured here (at actual fetch
+    time, i.e. only on a cache miss) so callers can show real data freshness
+    -- Trade Date alone can't do that, since it's the trade's own date, not
+    when we last pulled from the sheet."""
+    fetched_at = datetime.now()
     try:
         # Load the raw data
         df = pd.read_csv(url, engine='c')
@@ -394,10 +403,10 @@ def load_and_clean_data(url: str) -> pd.DataFrame:
             mask = df["Error"].astype(str).str.upper().isin({"TRUE", "1", "YES"})
             df = df[~mask]
             
-        return df
+        return df, fetched_at
     except Exception as e:
         st.error(f"Error loading global data: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(), fetched_at
 
 
 def get_max_trade_date(df):
@@ -1116,7 +1125,8 @@ def filter_pivot_dataframe(data, ticker_filter, min_notional, min_premium, min_m
         unique_symbols = f["Symbol"].unique()
         valid_symbols = set(unique_symbols)
         if min_mkt_cap > 0:
-            valid_symbols = {s for s in valid_symbols if get_market_cap(s) >= float(min_mkt_cap)}
+            batch_caps = fetch_market_caps_batch(list(valid_symbols))
+            valid_symbols = {s for s in valid_symbols if batch_caps.get(s, 0.0) >= float(min_mkt_cap)}
         if ema_filter == "Yes":
             batch_results = fetch_technicals_batch(list(valid_symbols))
             valid_symbols = {
@@ -1659,6 +1669,7 @@ def find_rsi_percentile_signals(df, ticker, pct_low=0.10, pct_high=0.90, min_n=1
 
 # --- SEASONALITY APP ---
 
+@st.cache_data(ttl=CACHE_TTL)
 def fetch_history_optimized(ticker_sym, t_map):
     pq_key = f"{ticker_sym}_PARQUET"
     if pq_key in t_map:

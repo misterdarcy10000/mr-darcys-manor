@@ -63,11 +63,14 @@ st.markdown("""<style>
 try:
     sheet_url = st.secrets["GSHEET_URL"]
     # Load Main DB using the Darcy Utils loader
-    df_global = ud.load_and_clean_data(sheet_url)
-    
-    # 2a. Database Date (from Google Sheet)
+    df_global, db_fetched_at = ud.load_and_clean_data(sheet_url)
+
+    # 2a. Database freshness -- shows when this data was actually last pulled
+    # from the sheet (not "Trade Date", which is just the trade's own date
+    # and stays "today" all day regardless of pull freshness). Matters now
+    # that the options database refreshes ~every 15 min during market hours.
     if not df_global.empty and "Trade Date" in df_global.columns:
-        db_date = df_global["Trade Date"].max().strftime("%d %b %y")
+        db_date = db_fetched_at.strftime("%d %b %y, %H:%M")
     else:
         db_date = "No Data"
     
