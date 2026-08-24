@@ -308,22 +308,16 @@ def run_pivot_tables_app(df):
         <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#f4c7c3"></div> Two Fridays</div>
     </div>""", unsafe_allow_html=True)
     st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Market Cap filtering can be buggy. If empty, reset \'Mkt Cap Min\' to 0B.</div>', unsafe_allow_html=True)
-    st.markdown('<div class="light-note" style="margin-top: 5px;">ℹ️ Scroll down to see the Risk Reversals table.</div>', unsafe_allow_html=True)
 
     d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
     if d_range.empty: return
 
-    cb_pool, ps_pool, pb_pool, df_rr = ud.generate_pivot_pools(d_range)
-    
+    cb_pool, ps_pool, pb_pool, _ = ud.generate_pivot_pools(d_range)
+
     # UPDATED: Passing min_premium into the dataframe filter functions
     df_cb_f = ud.filter_pivot_dataframe(cb_pool, ticker_filter, min_notional, min_premium, min_mkt_cap, ema_filter)
     df_ps_f = ud.filter_pivot_dataframe(ps_pool, ticker_filter, min_notional, min_premium, min_mkt_cap, ema_filter)
     df_pb_f = ud.filter_pivot_dataframe(pb_pool, ticker_filter, min_notional, min_premium, min_mkt_cap, ema_filter)
-    # Risk Reversals intentionally only respects the date range (already
-    # applied via d_range above) -- no min notional/premium/mktcap/ticker
-    # filtering, so every real RR candidate for the day is always visible
-    # (2026-08-22: user wants to see all of them regardless of size).
-    df_rr_f = df_rr
 
     row1_c1, row1_c2, row1_c3 = st.columns(3)
     with row1_c1:
@@ -338,13 +332,44 @@ def run_pivot_tables_app(df):
         st.subheader("Puts Bought")
         tbl = ud.get_pivot_styled_view(df_pb_f)
         if not tbl.empty: st.dataframe(tbl.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl, max_rows=50), column_config=ud.COLUMN_CONFIG_PIVOT)
-    
-    st.subheader("Risk Reversals")
-    tbl_rr = ud.get_pivot_styled_view(df_rr_f, is_rr=True)
-    if not tbl_rr.empty: 
+
+def run_risk_reversals_app(df):
+    st.title("🔀 Risk Reversals")
+    max_data_date = ud.get_max_trade_date(df)
+    ud.initialize_rr_state(max_data_date)
+
+    def save_rr_state(key, saved_key):
+        if key in st.session_state: st.session_state[saved_key] = st.session_state[key]
+
+    fc1, fc2, fc3 = st.columns(3)
+    with fc1: td_start = st.date_input("Trade Start Date", value=st.session_state.saved_rr_start, key="rr_start", on_change=save_rr_state, args=("rr_start", "saved_rr_start"))
+    with fc2: td_end = st.date_input("Trade End Date", value=st.session_state.saved_rr_end, key="rr_end", on_change=save_rr_state, args=("rr_end", "saved_rr_end"))
+    with fc3: ticker_filter = st.text_input("Ticker (blank=all)", value=st.session_state.saved_rr_ticker, key="rr_ticker", on_change=save_rr_state, args=("rr_ticker", "saved_rr_ticker")).strip().upper()
+
+    st.markdown("""<div style="display: flex; gap: 20px; font-size: 14px; margin-top: 10px; margin-bottom: 20px; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#b7e1cd"></div> This Friday</div>
+        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#fce8b2"></div> Next Friday</div>
+        <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#f4c7c3"></div> Two Fridays</div>
+    </div>""", unsafe_allow_html=True)
+
+    d_range = df[(df["Trade Date"].dt.date >= td_start) & (df["Trade Date"].dt.date <= td_end)].copy()
+    if d_range.empty:
+        st.caption("No matched RR pairs found.")
+        return
+
+    # Risk Reversals intentionally only respects the date range + ticker --
+    # no min notional/premium/mktcap filtering, so every real RR candidate
+    # in range is always visible (carried over from the Pivot Tables page,
+    # 2026-08-22: user wants to see all of them regardless of size).
+    _, _, _, df_rr = ud.generate_pivot_pools(d_range)
+    if ticker_filter:
+        df_rr = df_rr[df_rr["Symbol"].astype(str).str.upper() == ticker_filter]
+
+    tbl_rr = ud.get_pivot_styled_view(df_rr, is_rr=True)
+    if not tbl_rr.empty:
         st.dataframe(tbl_rr.style.format(ud.PIVOT_TABLE_FMT).map(ud.highlight_expiry, subset=["Expiry_Table"]), use_container_width=True, hide_index=True, height=ud.get_table_height(tbl_rr, max_rows=50), column_config=ud.COLUMN_CONFIG_PIVOT)
-        st.markdown("<br><br>", unsafe_allow_html=True)
-    else: st.caption("No matched RR pairs found.")
+    else:
+        st.caption("No matched RR pairs found.")
 
 def run_strike_zones_app(df):
     st.title("📊 Strike Zones")

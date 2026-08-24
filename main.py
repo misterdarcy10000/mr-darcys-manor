@@ -94,6 +94,7 @@ try:
         st.Page(lambda: main_darcy.run_database_app(df_global), title="Database", icon="📂", url_path="options_db", default=True),
         st.Page(lambda: main_darcy.run_rankings_app(df_global), title="Rankings", icon="🏆", url_path="rankings"),
         st.Page(lambda: main_darcy.run_pivot_tables_app(df_global), title="Pivot Tables", icon="🎯", url_path="pivot_tables"),
+        st.Page(lambda: main_darcy.run_risk_reversals_app(df_global), title="Risk Reversals", icon="🔀", url_path="risk_reversals"),
         st.Page(lambda: main_darcy.run_strike_zones_app(df_global), title="Strike Zones", icon="📊", url_path="strike_zones"),
         st.Page(lambda: main_darcy.run_price_divergences_app(df_global), title="Price Divergences", icon="📉", url_path="price_divergences"),
         st.Page(lambda: main_darcy.run_rsi_scanner_app(df_global), title="RSI Scanner", icon="🤖", url_path="rsi_scanner"),

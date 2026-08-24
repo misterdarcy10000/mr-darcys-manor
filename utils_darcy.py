@@ -1010,6 +1010,13 @@ def initialize_pivot_state(start_default, max_date):
     for key, val in defaults.items():
         if key not in st.session_state: st.session_state[key] = val
 
+def initialize_rr_state(max_date):
+    defaults = {
+        'saved_rr_start': max_date - timedelta(days=30), 'saved_rr_end': max_date, 'saved_rr_ticker': "",
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state: st.session_state[key] = val
+
 def generate_pivot_pools(d_range):
     """RR pairing is now computed once upstream (scraper's compute_rr_pairs,
     matching on trade-ID proximity, not contracts/premium -- real pairs have
