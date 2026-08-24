@@ -70,12 +70,12 @@ try:
     # Load Main DB using the Darcy Utils loader
     df_global, db_last_updated_at = ud.load_and_clean_data(sheet_url)
 
-    # 2a. Database freshness -- when the sheet's content actually last
-    # changed (row count), NOT when we last polled it. If the scraper
-    # stalls, a "last fetched" timestamp would keep advancing every poll
-    # even though the data itself is stuck -- this stays frozen instead,
-    # so staleness is actually visible. Also not "Trade Date" (the trade's
-    # own date), which just reads "today" all day regardless of freshness.
+    # 2a. Database freshness -- comes from the sheet's own 'Last Published
+    # (UTC)' column (stamped by the scraper's publish step, not by us), so
+    # it reflects when the data actually changed, not when we last polled.
+    # A stalled scraper keeps re-publishing the same timestamp, so staleness
+    # stays visible. Also not "Trade Date" (the trade's own date), which
+    # just reads "today" all day regardless of freshness.
     if not df_global.empty and "Trade Date" in df_global.columns:
         db_date = db_last_updated_at.astimezone(DISPLAY_TZ).strftime("%d %b %y, %H:%M")
     else:

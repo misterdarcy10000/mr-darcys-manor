@@ -349,42 +349,37 @@ COVID_DEFAULT_LOOKBACK = 10
 # (Shared ONLY between Database, Rankings, Pivot, Strike Zones)
 # ==========================================
 
-@st.cache_resource
-def _db_change_tracker():
-    """Small in-memory singleton (survives across cache_data misses within
-    the same running app instance) used only to detect whether the sheet's
-    actual content changed between pulls -- see load_and_clean_data."""
-    return {"row_count": None, "last_updated_at": None}
-
 @st.cache_data(ttl=DB_CACHE_TTL, show_spinner="Updating Data...")
 def load_and_clean_data(url: str):
     """Apps: Database, Rankings, Pivot, Strike Zones
-    Returns (df, last_updated_at). last_updated_at is NOT "when we last
-    fetched" -- it's when the sheet's row count last actually changed. If
-    the scraper stalls, we'd otherwise keep re-fetching the same stale sheet
-    every DB_CACHE_TTL and show an advancing "just fetched" timestamp that
-    looks fresh while the underlying data isn't -- confirmed as a real risk
-    2026-08-24. Row count is a reliable proxy since this is an append-only
-    log through the trading day (only historical backfills changed it any
-    other way, and those are one-off, already-completed operations).
-    Caveat: on a cold start (app restart/redeploy) there's no prior row
-    count to compare against, so the first load always reads as "just
-    updated" even if the sheet has been stale for hours -- unavoidable
-    without persisting state outside the running process.
-    """
+    Returns (df, last_updated_at). last_updated_at comes straight from the
+    sheet's own 'Last Published (UTC)' column (stamped by publish_to_sheet.py
+    on every run, in bulltard_scraper2 -- same value on every row for a
+    given run, since publishing is a full overwrite) -- same pattern price
+    history already uses (MAX of its own DATE column), rather than the
+    website trying to infer freshness from when *it* last polled. If the
+    scraper stalls, re-fetching the same sheet still returns the same old
+    timestamp, so staleness stays visible instead of looking falsely fresh.
+    Falls back to this function's own fetch time only if that column is
+    missing (e.g. an older, not-yet-republished sheet)."""
     # Timezone-aware UTC, not naive datetime.now() -- the deployment server's
     # local clock isn't necessarily the user's (confirmed: Streamlit Cloud
     # runs UTC), so a naive timestamp displayed as-is reads ~1hr "behind"
     # for a Europe/Lisbon viewer. Caller converts to a display timezone.
     fetched_at = datetime.now(timezone.utc)
-    tracker = _db_change_tracker()
     try:
         # Load the raw data
         df = pd.read_csv(url, engine='c')
-        
+
         # Standardize headers (removes hidden spaces)
         df.columns = [str(c).strip() for c in df.columns]
-        
+
+        last_updated_at = fetched_at
+        if "Last Published (UTC)" in df.columns:
+            parsed = pd.to_datetime(df["Last Published (UTC)"], utc=True, errors="coerce")
+            if parsed.notna().any():
+                last_updated_at = parsed.max().to_pydatetime()
+
         # 1. ADDED 'Premium' to the want set
         # 3. ADDED 'RR Pair ID' to the want set (2026-08-22: RR pairing now
         #    computed once upstream in the scraper, not re-derived per-app)
@@ -424,16 +419,10 @@ def load_and_clean_data(url: str):
             mask = df["Error"].astype(str).str.upper().isin({"TRUE", "1", "YES"})
             df = df[~mask]
 
-        row_count = len(df)
-        if tracker["row_count"] != row_count:
-            tracker["row_count"] = row_count
-            tracker["last_updated_at"] = fetched_at
-        last_updated_at = tracker["last_updated_at"] or fetched_at
-
         return df, last_updated_at
     except Exception as e:
         st.error(f"Error loading global data: {e}")
-        return pd.DataFrame(), (tracker["last_updated_at"] or fetched_at)
+        return pd.DataFrame(), fetched_at
 
 
 def get_max_trade_date(df):
