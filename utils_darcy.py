@@ -7,7 +7,7 @@ import yfinance as yf
 import math
 import requests
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -356,7 +356,11 @@ def load_and_clean_data(url: str):
     time, i.e. only on a cache miss) so callers can show real data freshness
     -- Trade Date alone can't do that, since it's the trade's own date, not
     when we last pulled from the sheet."""
-    fetched_at = datetime.now()
+    # Timezone-aware UTC, not naive datetime.now() -- the deployment server's
+    # local clock isn't necessarily the user's (confirmed: Streamlit Cloud
+    # runs UTC), so a naive timestamp displayed as-is reads ~1hr "behind"
+    # for a Europe/Lisbon viewer. Caller converts to a display timezone.
+    fetched_at = datetime.now(timezone.utc)
     try:
         # Load the raw data
         df = pd.read_csv(url, engine='c')

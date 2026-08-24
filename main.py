@@ -2,6 +2,11 @@
 import streamlit as st
 import pandas as pd
 from datetime import date
+from zoneinfo import ZoneInfo
+
+# Fixed display timezone (this is a single-user app) -- not the deployment
+# server's local time, which is UTC on Streamlit Cloud and not the user's.
+DISPLAY_TZ = ZoneInfo("Europe/Lisbon")
 
 # --- 0. PAGE CONFIGURATION ---
 # This MUST be the first Streamlit command called
@@ -70,7 +75,7 @@ try:
     # and stays "today" all day regardless of pull freshness). Matters now
     # that the options database refreshes ~every 15 min during market hours.
     if not df_global.empty and "Trade Date" in df_global.columns:
-        db_date = db_fetched_at.strftime("%d %b %y, %H:%M")
+        db_date = db_fetched_at.astimezone(DISPLAY_TZ).strftime("%d %b %y, %H:%M")
     else:
         db_date = "No Data"
     
