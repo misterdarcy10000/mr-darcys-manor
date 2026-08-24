@@ -346,6 +346,22 @@ def run_risk_reversals_app(df):
     with fc2: td_end = st.date_input("Trade End Date", value=st.session_state.saved_rr_end, key="rr_end", on_change=save_rr_state, args=("rr_end", "saved_rr_end"))
     with fc3: ticker_filter = st.text_input("Ticker (blank=all)", value=st.session_state.saved_rr_ticker, key="rr_ticker", on_change=save_rr_state, args=("rr_ticker", "saved_rr_ticker")).strip().upper()
 
+    fc4, fc5, fc6 = st.columns(3)
+    with fc4:
+        opts_put_not = list(ud.PIVOT_NOTIONAL_MAP.keys())
+        curr_put_not = st.session_state.saved_rr_put_notional
+        idx_put_not = opts_put_not.index(curr_put_not) if curr_put_not in opts_put_not else 0
+        sel_put_not = st.selectbox("Min Short Put Notional", options=opts_put_not, index=idx_put_not, key="rr_put_notional", on_change=save_rr_state, args=("rr_put_notional", "saved_rr_put_notional"))
+        min_short_put_notional = ud.PIVOT_NOTIONAL_MAP[sel_put_not]
+    with fc5:
+        opts_prem = list(ud.PIVOT_PREMIUM_MAP.keys())
+        curr_prem = st.session_state.saved_rr_premium
+        idx_prem = opts_prem.index(curr_prem) if curr_prem in opts_prem else 0
+        sel_prem = st.selectbox("Min Premium (either leg)", options=opts_prem, index=idx_prem, key="rr_premium", on_change=save_rr_state, args=("rr_premium", "saved_rr_premium"))
+        min_premium = ud.PIVOT_PREMIUM_MAP[sel_prem]
+    with fc6:
+        exp_end = st.date_input("Exp. Range (end)", value=st.session_state.saved_rr_exp, key="rr_exp", on_change=save_rr_state, args=("rr_exp", "saved_rr_exp"))
+
     st.markdown("""<div style="display: flex; gap: 20px; font-size: 14px; margin-top: 10px; margin-bottom: 20px; align-items: center;">
         <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#b7e1cd"></div> This Friday</div>
         <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 14px; height: 14px; border-radius: 3px; background:#fce8b2"></div> Next Friday</div>
@@ -357,13 +373,8 @@ def run_risk_reversals_app(df):
         st.caption("No matched RR pairs found.")
         return
 
-    # Risk Reversals intentionally only respects the date range + ticker --
-    # no min notional/premium/mktcap filtering, so every real RR candidate
-    # in range is always visible (carried over from the Pivot Tables page,
-    # 2026-08-22: user wants to see all of them regardless of size).
     _, _, _, df_rr = ud.generate_pivot_pools(d_range)
-    if ticker_filter:
-        df_rr = df_rr[df_rr["Symbol"].astype(str).str.upper() == ticker_filter]
+    df_rr = ud.filter_rr_dataframe(df_rr, ticker_filter, exp_end, min_short_put_notional, min_premium)
 
     tbl_rr = ud.get_pivot_styled_view(df_rr, is_rr=True)
     if not tbl_rr.empty:

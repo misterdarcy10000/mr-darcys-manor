@@ -1013,6 +1013,8 @@ def initialize_pivot_state(start_default, max_date):
 def initialize_rr_state(max_date):
     defaults = {
         'saved_rr_start': max_date - timedelta(days=30), 'saved_rr_end': max_date, 'saved_rr_ticker': "",
+        'saved_rr_put_notional': "0M", 'saved_rr_premium': "$0",
+        'saved_rr_exp': date.today() + timedelta(days=DB_DEFAULT_EXPIRY_OFFSET),
     }
     for key, val in defaults.items():
         if key not in st.session_state: st.session_state[key] = val
@@ -1072,6 +1074,32 @@ def generate_pivot_pools(d_range):
     return cb_pool, ps_pool, pb_pool, df_rr
 
 
+def filter_rr_dataframe(data, ticker_filter, exp_end, min_short_put_notional, min_premium):
+    if data.empty: return data
+    f = data.copy()
+    if ticker_filter: f = f[f["Symbol"].astype(str).str.upper() == ticker_filter]
+    if exp_end: f = f[f["Expiry_DT"].dt.date <= exp_end]
+    if f.empty: return f
+
+    # Min Short Put Notional only looks at the Puts Sold leg (Pair_Side == 1)
+    # of each pair -- the Calls Bought leg's size is irrelevant to this filter.
+    if min_short_put_notional > 0:
+        put_legs = f[f["Pair_Side"] == 1].set_index("Pair_ID")["Dollars"]
+        qualifying_ids = put_legs[put_legs >= min_short_put_notional].index
+        f = f[f["Pair_ID"].isin(qualifying_ids)]
+    if f.empty: return f
+
+    # Min Premium qualifies a whole pair if EITHER leg's premium clears the
+    # bar (not both, not the sum) -- e.g. $1M puts / $900K calls clears a
+    # $950K filter on the puts leg alone.
+    if min_premium > 0 and "Premium" in f.columns:
+        max_prem_per_pair = f.groupby("Pair_ID")["Premium"].max()
+        qualifying_ids = max_prem_per_pair[max_prem_per_pair >= min_premium].index
+        f = f[f["Pair_ID"].isin(qualifying_ids)]
+
+    return f
+
+
 def filter_pivot_dataframe(data, ticker_filter, min_notional, min_premium, min_mkt_cap, ema_filter):
     if data.empty: return data
     f = data.copy()
@@ -1101,34 +1129,39 @@ def filter_pivot_dataframe(data, ticker_filter, min_notional, min_premium, min_m
 
 def get_pivot_styled_view(data, is_rr=False):
     if data.empty:
-        cols = ["Symbol", "Strike", "Expiry_Table", "Contracts", "Notional"]
+        cols = ["Trade Date", "Symbol", "Strike", "Expiry_Table", "Contracts", "Notional"] if is_rr \
+            else ["Symbol", "Strike", "Expiry_Table", "Contracts", "Notional"]
         if "Premium" in data.columns: cols.append("Premium")
         return pd.DataFrame(columns=cols)
-        
-    sr = data.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
-    
-    if is_rr: 
-        piv = data.merge(sr, on="Symbol").sort_values(by=["Total_Sym_Dollars", "Pair_ID", "Pair_Side"], ascending=[False, True, True])
+
+    if is_rr:
+        # Newest trades first. Pair_ID/Pair_Side keeps each pair's two legs
+        # adjacent (same Trade Date for both legs, since pairing is grouped
+        # by Trade Date+Symbol+Expiry upstream in the scraper).
+        piv = data.sort_values(by=["Trade Date", "Pair_ID", "Pair_Side"], ascending=[False, True, True]).reset_index(drop=True)
+        piv["Trade Date"] = piv["Trade Date"].dt.strftime("%d %b %y")
     else:
+        sr = data.groupby("Symbol")["Dollars"].sum().rename("Total_Sym_Dollars")
         # We need to aggregate the Premium column identically to the Dollars
         agg_dict = {"Contracts": "sum", "Dollars": "sum"}
-        if "Premium" in data.columns: 
+        if "Premium" in data.columns:
             agg_dict["Premium"] = "sum"
-            
+
         piv = data.groupby(["Symbol", "Strike", "Expiry_DT"]).agg(agg_dict).reset_index().merge(sr, on="Symbol")
         piv = piv.sort_values(by=["Total_Sym_Dollars", "Dollars"], ascending=[False, False])
-        
+
     piv["Expiry_Fmt"] = piv["Expiry_DT"].dt.strftime("%d %b %y")
     piv["Symbol_Display"] = np.where(piv["Symbol"] == piv["Symbol"].shift(1), "", piv["Symbol"])
-    
+
     # FIX: Drop the original Symbol column before renaming Symbol_Display
     piv.drop(columns=["Symbol"], inplace=True)
-    
+
     # Rename Dollars to Notional
     piv.rename(columns={"Symbol_Display": "Symbol", "Expiry_Fmt": "Expiry_Table", "Dollars": "Notional"}, inplace=True)
-    
+
     # Prepare the final output order
-    out_cols = ["Symbol", "Strike", "Expiry_Table", "Contracts", "Notional"]
+    out_cols = ["Trade Date", "Symbol", "Strike", "Expiry_Table", "Contracts", "Notional"] if is_rr \
+        else ["Symbol", "Strike", "Expiry_Table", "Contracts", "Notional"]
     if "Premium" in piv.columns: out_cols.append("Premium")
     
     return piv[out_cols]
