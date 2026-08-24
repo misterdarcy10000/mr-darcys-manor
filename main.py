@@ -68,14 +68,16 @@ st.markdown("""<style>
 try:
     sheet_url = st.secrets["GSHEET_URL"]
     # Load Main DB using the Darcy Utils loader
-    df_global, db_fetched_at = ud.load_and_clean_data(sheet_url)
+    df_global, db_last_updated_at = ud.load_and_clean_data(sheet_url)
 
-    # 2a. Database freshness -- shows when this data was actually last pulled
-    # from the sheet (not "Trade Date", which is just the trade's own date
-    # and stays "today" all day regardless of pull freshness). Matters now
-    # that the options database refreshes ~every 15 min during market hours.
+    # 2a. Database freshness -- when the sheet's content actually last
+    # changed (row count), NOT when we last polled it. If the scraper
+    # stalls, a "last fetched" timestamp would keep advancing every poll
+    # even though the data itself is stuck -- this stays frozen instead,
+    # so staleness is actually visible. Also not "Trade Date" (the trade's
+    # own date), which just reads "today" all day regardless of freshness.
     if not df_global.empty and "Trade Date" in df_global.columns:
-        db_date = db_fetched_at.astimezone(DISPLAY_TZ).strftime("%d %b %y, %H:%M")
+        db_date = db_last_updated_at.astimezone(DISPLAY_TZ).strftime("%d %b %y, %H:%M")
     else:
         db_date = "No Data"
     
