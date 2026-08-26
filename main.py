@@ -1,7 +1,8 @@
 # --- IMPORTS ---
 import streamlit as st
 import pandas as pd
-from datetime import date
+import json
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 # Fixed display timezone (this is a single-user app) -- not the deployment
@@ -70,33 +71,31 @@ try:
     # Load Main DB using the Darcy Utils loader
     df_global, db_last_updated_at = ud.load_and_clean_data(sheet_url)
 
-    # 2a. Database freshness -- comes from the sheet's own 'Last Published
-    # (UTC)' column (stamped by the scraper's publish step, not by us), so
-    # it reflects when the data actually changed, not when we last polled.
-    # A stalled scraper keeps re-publishing the same timestamp, so staleness
-    # stays visible. Also not "Trade Date" (the trade's own date), which
-    # just reads "today" all day regardless of freshness.
-    if not df_global.empty and "Trade Date" in df_global.columns:
-        db_date = db_last_updated_at.astimezone(DISPLAY_TZ).strftime("%d %b %y, %H:%M")
-    else:
-        db_date = "No Data"
-    
-    # 2b. Price History Date (Check max date in PARQUET_SP100)
-    price_date = "Syncing..."
+    # 2a/2b. Sidebar freshness times -- both now read from one small
+    # Updated_Timestamps.json file that each Beelink pipeline stamps as the
+    # last thing it does on a successful run (2026-08-26), instead of
+    # re-deriving freshness from the data itself: the database used to read
+    # a 'Last Published (UTC)' column off the sheet, and price history used
+    # to download the entire SP100 parquet just to check its max date. A
+    # stalled pipeline keeps re-publishing the same timestamp here too, so
+    # staleness still stays visible -- just without the extra data read.
+    def _format_ts(raw):
+        if not raw:
+            return None
+        try:
+            return datetime.fromisoformat(raw).astimezone(DISPLAY_TZ).strftime("%d %b %y, %H:%M")
+        except (ValueError, TypeError):
+            return None
+
+    db_date, price_date = "No Data", "Offline"
     try:
-        # Check combined SP100 parquet file using Darcy Utils
-        df_sp100_check = ud.load_parquet_and_clean("PARQUET_SP100")
-        
-        if df_sp100_check is not None and not df_sp100_check.empty:
-            date_col_check = next((c for c in df_sp100_check.columns if 'DATE' in c.upper()), None)
-            if date_col_check:
-                price_date = pd.to_datetime(df_sp100_check[date_col_check]).max().strftime("%d %b %y")
-            else:
-                price_date = "Date Error"
-        else:
-            price_date = "Read Error"
+        ts_url = st.secrets.get("URL_Timestamps", "")
+        buffer = ud.get_gdrive_binary_data(ts_url) if ts_url else None
+        timestamps = json.loads(buffer.getvalue()) if buffer else {}
+        db_date = _format_ts(timestamps.get("options_database")) or "No Data"
+        price_date = _format_ts(timestamps.get("price_history")) or "Offline"
     except Exception:
-        price_date = "Offline"
+        pass
 
     # --- 3. NAVIGATION SETUP ---
     pg = st.navigation([
