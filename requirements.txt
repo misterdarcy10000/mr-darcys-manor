@@ -2,10 +2,8 @@ yfinance
 streamlit-authenticator
 PyYAML
 requests
-plotly
 tqdm
 google-generativeai
-spicy
 pyarrow
 plotly>=5.15.0
 pandas==2.2.3
